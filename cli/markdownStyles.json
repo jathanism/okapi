@@ -1,0 +1,34 @@
+{
+  "document": {
+    "indent": 0,
+    "margin": 0
+  },
+  "h1": {
+    "prefix": ""
+  },
+  "h2": {
+    "prefix": ""
+  },
+  "h3": {
+    "prefix": ""
+  },
+  "h4": {
+    "prefix": ""
+  },
+  "h5": {
+    "prefix": ""
+  },
+  "h6": {
+    "prefix": ""
+  },
+  "item": {
+    "block_prefix": ""
+  },
+  "table": {
+    "center_separator": " ",
+    "column_separator": " ",
+    "margin": 0,
+    "row_separator": "",
+    "width": "100"
+  }
+}
