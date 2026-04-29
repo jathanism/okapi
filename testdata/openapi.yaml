@@ -1,0 +1,164 @@
+openapi: 3.0.3
+info:
+  title: Okapi Test API
+  version: 0.1.0
+  description: Test spec for Okapi library tests
+paths:
+  /api/accounts/change-password/:
+    get:
+      operationId: accounts_change-password
+      description: Change the password of the currently authenticated user.
+      summary: Change user password
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: {}
+          description: ""
+  /api/users/:
+    get:
+      operationId: users_list
+      description: List all users.
+      summary: List users
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+          description: ""
+  /api/organizations/{organization_id}/users/:
+    get:
+      operationId: organizations_users_list
+      description: List users in an organization.
+      summary: List organization users
+      parameters:
+        - name: organization_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+          description: ""
+    post:
+      operationId: organizations_users_create
+      description: Create a user in an organization.
+      summary: Create organization user
+      parameters:
+        - name: organization_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  email:
+                    type: string
+          description: ""
+  /api/organizations/by-slug/{slug}/:
+    get:
+      operationId: organizations_by-slug
+      description: Retrieve an organization by its slug.
+      summary: Get organization by slug
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+          description: ""
+  /api/users/create/:
+    post:
+      operationId: users_create
+      description: Create a new user.
+      summary: Create user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                type: object
+          description: ""
+  /api/schemas/:
+    get:
+      operationId: schemas_list
+      description: List all schemas.
+      summary: List schemas
+      parameters:
+        - name: slug
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+          description: ""
