@@ -130,6 +130,28 @@ var _ = Describe("Endpoint", func() {
 			name := endpoint.MethodName()
 			Expect(name).To(Equal("AccountsChangePassword"))
 		})
+
+		// Regression: the previous regex only matched lowercase runs, so
+		// camelCase / PascalCase operationIds had every uppercase letter
+		// that started an internal word silently dropped — e.g.
+		// "ackAudience" became "AckUdience" and "bulkDeleteContacts"
+		// became "BulkEleteOntacts" in the generated openapi_gen.go.
+		DescribeTable("normalizes various input shapes to CamelCase",
+			func(input, want string) {
+				e := &spec.Endpoint{Name: input}
+				Expect(e.MethodName()).To(Equal(want))
+			},
+			Entry("snake_case", "accounts_verify_email", "AccountsVerifyEmail"),
+			Entry("kebab-case", "accounts-verify-email", "AccountsVerifyEmail"),
+			Entry("mixed snake and kebab", "accounts_verify-email", "AccountsVerifyEmail"),
+			Entry("camelCase (regression)", "ackAudience", "AckAudience"),
+			Entry("camelCase three words (regression)", "bulkDeleteContacts", "BulkDeleteContacts"),
+			Entry("PascalCase (regression)", "CreateTag", "CreateTag"),
+			Entry("single word lowercase", "healthz", "Healthz"),
+			Entry("single word digits", "metrics2", "Metrics2"),
+			Entry("camelCase with digits", "getV2Resource", "GetV2Resource"),
+			Entry("already CamelCase passes through", "AccountsVerifyEmail", "AccountsVerifyEmail"),
+		)
 	})
 
 	Describe("ParamNames", func() {

@@ -410,21 +410,39 @@ func MakeEndpoint(method, path string, op *v3.Operation, item *v3.PathItem) *End
 /* Endpoint methods
 *******************/
 
+// camelCaseBoundary matches a lowercase letter or digit immediately followed
+// by an uppercase letter, which is the boundary between words in a camelCase
+// or PascalCase identifier (e.g. the "kA" in "ackAudience").
+var camelCaseBoundary = regexp.MustCompile(`([a-z0-9])([A-Z])`)
+
+// wordSeparator splits a normalized identifier on _ or - runs.
+var wordSeparator = regexp.MustCompile(`[_-]+`)
+
 // MethodName returns the CamelCase method name for the endpoint.
 //
-// This converts _ and - separators into words that are CamelCase. For example, "accounts_verify-email" becomes "AccountsVerifyEmail".
+// This converts _, -, and camelCase/PascalCase boundaries into words that are
+// joined as CamelCase. For example, "accounts_verify-email" and
+// "accountsVerifyEmail" both become "AccountsVerifyEmail".
 func (e *Endpoint) MethodName() string {
 	if e.methodName != "" {
 		return e.methodName
 	}
 
-	// Convert the snake_case name to StudlyCaps
-	re := regexp.MustCompile(`([a-z]+)[_-]?`)
-	parts := re.FindAllString(e.Name, -1)
-	for i, part := range parts {
-		parts[i] = strings.ToUpper(part[0:1]) + strings.ToLower(strings.Trim(part[1:], "_-"))
+	// Insert underscores at camelCase/PascalCase boundaries so the splitter
+	// below treats "ackAudience" the same as "ack_audience". Without this,
+	// the previous lowercase-only regex silently dropped every uppercase
+	// letter that started an internal word.
+	normalized := camelCaseBoundary.ReplaceAllString(e.Name, "${1}_${2}")
+
+	parts := wordSeparator.Split(normalized, -1)
+	out := parts[:0]
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		out = append(out, strings.ToUpper(part[0:1])+strings.ToLower(part[1:]))
 	}
-	e.methodName = strings.Join(parts, "")
+	e.methodName = strings.Join(out, "")
 	return e.methodName
 }
 
