@@ -124,6 +124,17 @@ paths:
       operationId: users_create
       description: Create a new user.
       summary: Create user
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Trace-Id
+          in: header
+          required: false
+          schema:
+            type: string
       requestBody:
         required: true
         content:

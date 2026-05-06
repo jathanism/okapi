@@ -198,6 +198,35 @@ customList := api.UsersList.With(
 err := customList(request.Result(&result))
 ```
 
+### Params vs. headers
+
+Okapi separates spec-declared parameters by location:
+
+- `request.Param(name, value)` — for `path`, `query`, and `cookie` parameters
+- `request.Header(name, value)` — for `header` parameters declared in the spec, **and** for ad-hoc HTTP headers (`Authorization`, `Content-Type`, etc.) that aren't in the spec at all
+
+If a spec declares a parameter with `in: header` (e.g. `Idempotency-Key`), pass it through `request.Header(...)`. Passing it through `request.Param(...)` will fail validation with a message pointing you at the right helper, and vice versa:
+
+```go
+// Spec: Idempotency-Key is declared as `in: header`
+
+// Correct:
+err := api.UsersCreate(
+    request.Header("Idempotency-Key", "abc-123"),
+    request.Body(payload),
+)
+
+// Wrong — Validate returns:
+//   "Parameter Idempotency-Key is a header — pass it with
+//    request.Header(\"Idempotency-Key\", ...) instead of request.Param(...)"
+err := api.UsersCreate(
+    request.Param("Idempotency-Key", "abc-123"),
+    request.Body(payload),
+)
+```
+
+Headers that aren't declared in the spec (auth tokens, tracing IDs, etc.) pass through to the API client untouched.
+
 ## Logging
 
 Okapi uses [charmbracelet/log](https://github.com/charmbracelet/log) internally. Enable debug or trace output with the `DEBUG` env var:

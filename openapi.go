@@ -1,7 +1,6 @@
 package openapi
 
 import (
-	"fmt"
 	"reflect"
 	"strings"
 
@@ -214,8 +213,11 @@ func CallEndpoint(endpoint *spec.Endpoint, options ...request.RequestOption) err
 	req := request.NewRequest(options...)
 	log.Trace("NewRequest", "req", req)
 
-	// Validate the request against the endpoint
-	err := endpoint.Validate(req.Params, req.Body)
+	// Validate the request against the endpoint. Header params declared in
+	// the spec must come in via req.Headers; Validate enforces that and
+	// returns a clear error if a caller tried to use request.Param for a
+	// header.
+	err := endpoint.Validate(req.Params, req.Headers, req.Body)
 	if err != nil {
 		return err
 	}
@@ -227,26 +229,6 @@ func CallEndpoint(endpoint *spec.Endpoint, options ...request.RequestOption) err
 
 	// Capitalize the method, which is wasteful to always do but meh
 	method := strings.ToUpper(endpoint.Method)
-
-	// Check for parameters that should be headers and move them
-	for name, values := range req.Params {
-		param, ok := endpoint.Params[name]
-		if !ok {
-			continue
-		}
-		if param.In == "header" {
-			// Convert the param to a header
-			for _, val := range values {
-				if str, ok := val.(string); ok {
-					req.Headers[name] = append(req.Headers[name], str)
-				} else {
-					req.Headers[name] = append(req.Headers[name], fmt.Sprint(val))
-				}
-			}
-			// Remove it from params so it doesn't get added to URL
-			delete(req.Params, name)
-		}
-	}
 
 	// Make our URL, this should never fail since it's validated
 	url := endpoint.MustMakeUrl(req.Params)

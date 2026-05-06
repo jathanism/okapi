@@ -137,6 +137,14 @@ func (o *OpenApiCli) makeAction(endpoint *spec.Endpoint) cli.ActionFunc {
 			if !cCtx.IsSet(name) {
 				continue
 			}
+			// Header-typed params must be sent through request.Header(...),
+			// not request.Param(...), since the validator now enforces that
+			// distinction. Stringify whatever flag value we got — HTTP
+			// headers are always strings on the wire anyway.
+			if param.In == "header" {
+				opts = append(opts, request.Header(name, cCtx.String(name)))
+				continue
+			}
 			var paramFromFlag request.RequestOption
 			switch param.Type {
 			case "string":
