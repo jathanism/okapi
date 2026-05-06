@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"text/template"
 
@@ -34,9 +35,9 @@ func main() {
 	schemaDir := flag.String("schema-dir", "./cli/schema", "Output directory for embedded schema file")
 	flag.Parse()
 
-	specSource := *source
-	if specSource == "" {
-		specSource = os.Getenv("OKAPI_OPENAPI_SOURCE")
+	specSource, err := resolveSpecSource(*source, *defaultHost, os.Getenv("OKAPI_OPENAPI_SOURCE"))
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	if specSource == "embed" {
@@ -44,13 +45,8 @@ func main() {
 		if api, err = (*openapi.OpenApi)(nil).NewFromBytes([]byte{}); err != nil {
 			log.Fatal("embedded schema not available in standalone okapi; provide --source")
 		}
-	} else if specSource != "" {
-		api = makeOpenApiFromSource(specSource, *schemaDir)
-	} else if *defaultHost != "" {
-		specSource = "https://" + *defaultHost + "/api/schema/"
-		api = makeOpenApiFromSource(specSource, *schemaDir)
 	} else {
-		log.Fatal("specify --host or --source, or set OKAPI_OPENAPI_SOURCE")
+		api = makeOpenApiFromSource(specSource, *schemaDir)
 	}
 
 	if api == nil {
@@ -70,6 +66,45 @@ func main() {
 	writeTemplate("openapi_gen", openapiTemplate, names)
 }
 
+// resolveSpecSource decides which OpenAPI spec source to use. Precedence is
+// --source flag, then OKAPI_OPENAPI_SOURCE env, then a synthesized URL from
+// --host. It returns an error only when none of the inputs yield a usable
+// source. The returned value is passed straight through to
+// spec.OpenApiSpec.NewFromSource, which handles file://, HTTP(S), and raw
+// bytes — so callers must not pre-filter by URL scheme here.
+func resolveSpecSource(sourceFlag, hostFlag, envSource string) (string, error) {
+	if sourceFlag != "" {
+		return sourceFlag, nil
+	}
+	if envSource != "" {
+		return envSource, nil
+	}
+	if hostFlag != "" {
+		return "https://" + hostFlag + "/api/schema/", nil
+	}
+	return "", fmt.Errorf("specify --host or --source, or set OKAPI_OPENAPI_SOURCE")
+}
+
+// writeEmbeddedSchema writes the raw OpenAPI schema to <schemaDir>/openapi.yaml,
+// creating schemaDir (and any missing parents) if needed. It returns the
+// resolved schema path.
+func writeEmbeddedSchema(schemaDir string, data []byte) (string, error) {
+	// os.OpenFile with O_CREATE only creates the file, not parent directories.
+	if err := os.MkdirAll(schemaDir, 0755); err != nil {
+		return "", err
+	}
+	schemaPath := filepath.Join(schemaDir, "openapi.yaml")
+	schema, err := os.OpenFile(schemaPath, openFlags, 0644)
+	if err != nil {
+		return "", err
+	}
+	defer schema.Close()
+	if _, err := schema.Write(data); err != nil {
+		return "", err
+	}
+	return schemaPath, nil
+}
+
 // makeOpenApiFromSource will build a new OpenApi from the provided source. If
 // there's an error, it will panic.
 func makeOpenApiFromSource(source string, schemaDir string) (api *openapi.OpenApi) {
@@ -84,18 +119,8 @@ func makeOpenApiFromSource(source string, schemaDir string) (api *openapi.OpenAp
 		log.Fatal(err)
 	} else {
 		log.Info("Generating embedded schema...")
-		// Ensure the schema directory exists; os.OpenFile with O_CREATE will
-		// not create missing parent directories.
-		if err := os.MkdirAll(schemaDir, 0755); err != nil {
-			log.Fatal(err)
-		}
-		schemaPath := schemaDir + "/openapi.yaml"
-		schema, err := os.OpenFile(schemaPath, openFlags, 0644)
+		schemaPath, err := writeEmbeddedSchema(schemaDir, spec.RawSchema)
 		if err != nil {
-			log.Fatal(err)
-		}
-		defer schema.Close()
-		if _, err := schema.Write(spec.RawSchema); err != nil {
 			log.Fatal(err)
 		}
 		log.Info("Updated embedded schema: " + schemaPath)
