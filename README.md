@@ -212,30 +212,44 @@ No ApiClient available, did you forget to call OpenApi.WithClient()?
 `CallEndpoint` is the low-level dispatcher used internally — it doesn't know
 about the client you bound to your `*OpenApi`. You have two pragmatic options:
 
-**1. Reflective field lookup** (recommended when you have the bound `*OpenApi`):
+> **Note:** `api.Endpoints()` is keyed by the spec's `operationId` (the raw
+> name in the OpenAPI document, e.g. `usersList`). The matching field on the
+> generated `*OpenApi` struct uses the CamelCased form returned by
+> `(*spec.Endpoint).MethodName()` (e.g. `UsersList`). Use the raw name when
+> looking up the endpoint, and `MethodName()` when looking up the field.
 
-Look up the generated struct field by `MethodName()` and invoke it. This
-preserves the client (and any other options) bound via `WithClient` / `With`:
-
-```go
-api = api.WithClient(myClient)
-
-ep := api.Endpoints()["users.list"] // however you found it
-name := ep.MethodName()             // e.g. "UsersList"
-
-field := reflect.ValueOf(api).Elem().FieldByName(name)
-fn := field.Interface().(openapi.OpenApiEndpoint)
-
-err := fn(request.Result(&result))
-```
-
-**2. Pass the client through per-call** (works without a bound `*OpenApi`):
+**1. Pass the client through per-call** (recommended — no `reflect`, works for any spec):
 
 ```go
 err := openapi.CallEndpoint(ep,
     request.WithClient(myClient),
     request.Result(&result),
 )
+```
+
+This is the simplest form and works whether or not you have a bound
+`*OpenApi`. It's the right default for tooling that walks `api.Endpoints()`
+or for tests that drive specs the generated struct doesn't match. See
+[`examples/client-test`](examples/client-test) for a runnable end-to-end
+example that uses this pattern.
+
+**2. Reflective field lookup** (when you specifically need the options bound to your `*OpenApi`):
+
+Look up the generated struct field by `MethodName()` and invoke it. This
+inherits everything bound via `WithClient` / `With`, so it's the form to
+reach for when you've layered on auth headers, defaults, etc., and want
+each dynamic call to pick those up:
+
+```go
+api = api.WithClient(myClient).With(request.Header("Authorization", "Bearer "+token))
+
+ep := api.Endpoints()["usersList"]  // keyed by spec operationId
+name := ep.MethodName()             // CamelCased, e.g. "UsersList"
+
+field := reflect.ValueOf(api).Elem().FieldByName(name)
+fn := field.Interface().(openapi.OpenApiEndpoint)
+
+err := fn(request.Result(&result))
 ```
 
 ### Params vs. headers
