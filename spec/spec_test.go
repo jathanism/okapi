@@ -88,7 +88,7 @@ var _ = Describe("OpenApiSpec", func() {
 				Param("limit", 123),
 			)
 			endpoint := api.Endpoints["organizations_users_list"]
-			err := endpoint.Validate(r.Params, nil)
+			err := endpoint.Validate(r.Params, r.Headers, nil)
 			Expect(err).To(BeNil())
 			url := endpoint.MustMakeUrl(r.Params)
 			Expect(url).To(ContainSubstring("/api/organizations/123/users/?"))
@@ -100,7 +100,7 @@ var _ = Describe("OpenApiSpec", func() {
 				Param("organization_id", []byte("123")),
 			)
 			endpoint := api.Endpoints["organizations_users_list"]
-			err := endpoint.Validate(r.Params, nil)
+			err := endpoint.Validate(r.Params, r.Headers, nil)
 			Expect(err).To(BeNil())
 			url := endpoint.MustMakeUrl(r.Params)
 			Expect(url).To(Equal("/api/organizations/123/users/"))
@@ -113,10 +113,73 @@ var _ = Describe("OpenApiSpec", func() {
 				Data("password", "secret"),
 			)
 			endpoint := api.Endpoints["organizations_users_create"]
-			err := endpoint.Validate(r.Params, r.Body)
+			err := endpoint.Validate(r.Params, r.Headers, r.Body)
 			Expect(err).To(BeNil())
 			url := endpoint.MustMakeUrl(r.Params)
 			Expect(url).To(Equal("/api/organizations/123/users/"))
+		})
+
+		// Regression: spec-declared header params used to be silently
+		// migrated from r.Params into r.Headers by openapi.CallEndpoint,
+		// which made the header-vs-param distinction invisible to callers.
+		// Validate now requires headers to be supplied via request.Header()
+		// and rejects misuse with a pointer-message error.
+		Context("header parameter routing", func() {
+			It("accepts headers via the headers map", func() {
+				r := NewRequest(
+					Header("Idempotency-Key", "abc-123"),
+					Data("email", "h@example.com"),
+				)
+				endpoint := api.Endpoints["users_create"]
+				err := endpoint.Validate(r.Params, r.Headers, r.Body)
+				Expect(err).To(BeNil())
+			})
+
+			It("rejects header params passed via Param() with a pointer message", func() {
+				r := NewRequest(
+					Param("Idempotency-Key", "abc-123"),
+					Data("email", "h@example.com"),
+				)
+				endpoint := api.Endpoints["users_create"]
+				err := endpoint.Validate(r.Params, r.Headers, r.Body)
+				Expect(err).To(HaveOccurred())
+				Expect(err).To(MatchError(ContainSubstring("Idempotency-Key")))
+				Expect(err).To(MatchError(ContainSubstring("request.Header")))
+			})
+
+			It("rejects non-header params passed via Header() with a pointer message", func() {
+				r := NewRequest(
+					Param("organization_id", "123"),
+					Header("limit", "5"),
+				)
+				endpoint := api.Endpoints["organizations_users_list"]
+				err := endpoint.Validate(r.Params, r.Headers, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(err).To(MatchError(ContainSubstring("limit")))
+				Expect(err).To(MatchError(ContainSubstring("request.Param")))
+			})
+
+			It("requires a header param marked required", func() {
+				r := NewRequest(
+					Data("email", "h@example.com"),
+				)
+				endpoint := api.Endpoints["users_create"]
+				err := endpoint.Validate(r.Params, r.Headers, r.Body)
+				Expect(err).To(HaveOccurred())
+				Expect(err).To(MatchError(ContainSubstring("Idempotency-Key")))
+				Expect(err).To(MatchError(ContainSubstring("required")))
+			})
+
+			It("ignores ad-hoc headers not declared in the spec", func() {
+				r := NewRequest(
+					Header("Idempotency-Key", "abc-123"),
+					Header("X-Random-Header", "anything"),
+					Data("email", "h@example.com"),
+				)
+				endpoint := api.Endpoints["users_create"]
+				err := endpoint.Validate(r.Params, r.Headers, r.Body)
+				Expect(err).To(BeNil())
+			})
 		})
 	})
 })

@@ -486,13 +486,50 @@ func (e *Endpoint) BodySchema(prefixes ...string) string {
 	return string(data)
 }
 
-func (e *Endpoint) Validate(params map[string][]any, body any) error {
+// Validate checks the supplied params, headers, and body against the
+// endpoint's declared schema.
+//
+// Spec-declared header parameters MUST be supplied via headers (i.e.
+// request.Header(...)), not via params (request.Param(...)). Passing a
+// spec-declared header parameter through params returns an error pointing
+// the caller at the right helper. Headers that are not declared in the spec
+// are passed through untouched (e.g. ad-hoc Authorization, Content-Type).
+func (e *Endpoint) Validate(params map[string][]any, headers map[string][]string, body any) error {
 
-	// Type validation
+	// Type validation for non-header params. Header params declared in the
+	// spec must come in through `headers`, not `params` — flag that mistake
+	// with a clear message instead of silently moving them like we used to.
 	for name, values := range params {
 		param, ok := e.Params[name]
 		if !ok {
 			return Error(OpenApiValidationError, "Unknown parameter: "+name)
+		}
+		if param.In == "header" {
+			return Error(OpenApiValidationError, fmt.Sprintf(
+				"Parameter %s is a header — pass it with request.Header(%q, ...) instead of request.Param(...)",
+				name, name,
+			))
+		}
+		for _, value := range values {
+			err := param.Validate(value)
+			if err != nil {
+				return Error(OpenApiValidationError, err)
+			}
+		}
+	}
+
+	// Type validation for header params declared in the spec. Headers not
+	// declared in the spec are pass-through and are not validated here.
+	for name, values := range headers {
+		param, ok := e.Params[name]
+		if !ok {
+			continue
+		}
+		if param.In != "header" {
+			return Error(OpenApiValidationError, fmt.Sprintf(
+				"Parameter %s is a %s parameter — pass it with request.Param(%q, ...) instead of request.Header(...)",
+				name, param.In, name,
+			))
 		}
 		for _, value := range values {
 			err := param.Validate(value)
@@ -505,6 +542,12 @@ func (e *Endpoint) Validate(params map[string][]any, body any) error {
 	// Presence validation
 	for name, param := range e.Params {
 		if !param.Required {
+			continue
+		}
+		if param.In == "header" {
+			if _, ok := headers[name]; !ok {
+				return Error(OpenApiValidationError, "Header "+name+" is required")
+			}
 			continue
 		}
 		if _, ok := params[name]; !ok {
