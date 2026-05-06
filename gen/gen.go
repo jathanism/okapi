@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strings"
 	"text/template"
 
 	"github.com/jathanism/okapi"
@@ -45,15 +44,17 @@ func main() {
 		if api, err = (*openapi.OpenApi)(nil).NewFromBytes([]byte{}); err != nil {
 			log.Fatal("embedded schema not available in standalone okapi; provide --source")
 		}
-	} else if strings.HasPrefix(specSource, "https://") {
+	} else if specSource != "" {
 		api = makeOpenApiFromSource(specSource, *schemaDir)
-	} else if specSource == "" {
-		if *defaultHost != "" {
-			specSource = "https://" + *defaultHost + "/api/schema/"
-		} else {
-			log.Fatal("specify --host or --source, or set OKAPI_OPENAPI_SOURCE")
-		}
+	} else if *defaultHost != "" {
+		specSource = "https://" + *defaultHost + "/api/schema/"
 		api = makeOpenApiFromSource(specSource, *schemaDir)
+	} else {
+		log.Fatal("specify --host or --source, or set OKAPI_OPENAPI_SOURCE")
+	}
+
+	if api == nil {
+		log.Fatal("failed to build OpenApi from source: " + specSource)
 	}
 
 	// Iterate over all the endpoints to get the list of CamelCased names
