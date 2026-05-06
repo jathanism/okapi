@@ -7,7 +7,7 @@ import (
 	"sort"
 	"text/template"
 
-	"github.com/jathanism/okapi"
+	openapi "github.com/jathanism/okapi"
 	"github.com/jathanism/okapi/internal/log"
 	"github.com/jathanism/okapi/spec"
 )
@@ -84,14 +84,21 @@ func makeOpenApiFromSource(source string, schemaDir string) (api *openapi.OpenAp
 		log.Fatal(err)
 	} else {
 		log.Info("Generating embedded schema...")
-		// Update the embedded Schema
-		schemaPath := schemaDir + "/openapi.yaml"
-		if schema, err := os.OpenFile(schemaPath, openFlags, 0644); err != nil {
+		// Ensure the schema directory exists; os.OpenFile with O_CREATE will
+		// not create missing parent directories.
+		if err := os.MkdirAll(schemaDir, 0755); err != nil {
 			log.Fatal(err)
-		} else {
-			schema.Write(spec.RawSchema)
-			log.Info("Updated embedded schema: " + schemaPath)
 		}
+		schemaPath := schemaDir + "/openapi.yaml"
+		schema, err := os.OpenFile(schemaPath, openFlags, 0644)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer schema.Close()
+		if _, err := schema.Write(spec.RawSchema); err != nil {
+			log.Fatal(err)
+		}
+		log.Info("Updated embedded schema: " + schemaPath)
 	}
 	return
 }
