@@ -146,6 +146,8 @@ var _ = Describe("Endpoint", func() {
 			Entry("mixed snake and kebab", "accounts_verify-email", "AccountsVerifyEmail"),
 			Entry("camelCase (regression)", "ackAudience", "AckAudience"),
 			Entry("camelCase three words (regression)", "bulkDeleteContacts", "BulkDeleteContacts"),
+			Entry("camelCase three words, second variant (regression)", "segmentCountContacts", "SegmentCountContacts"),
+			Entry("camelCase four words (regression)", "upsertContactByPhone", "UpsertContactByPhone"),
 			Entry("PascalCase (regression)", "CreateTag", "CreateTag"),
 			Entry("single word lowercase", "healthz", "Healthz"),
 			Entry("single word digits", "metrics2", "Metrics2"),
