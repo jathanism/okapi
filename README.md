@@ -198,6 +198,46 @@ customList := api.UsersList.With(
 err := customList(request.Result(&result))
 ```
 
+### Dynamic dispatch (calling endpoints by name)
+
+`WithClient` only binds the typed `OpenApiEndpoint` fields on the generated
+`OpenApi` struct — it does **not** mutate the raw `*spec.Endpoint` values
+returned by `api.Endpoints()`. If you fetch an endpoint from that map and try
+to call it directly with `openapi.CallEndpoint(ep, ...)`, you'll get:
+
+```
+No ApiClient available, did you forget to call OpenApi.WithClient()?
+```
+
+`CallEndpoint` is the low-level dispatcher used internally — it doesn't know
+about the client you bound to your `*OpenApi`. You have two pragmatic options:
+
+**1. Reflective field lookup** (recommended when you have the bound `*OpenApi`):
+
+Look up the generated struct field by `MethodName()` and invoke it. This
+preserves the client (and any other options) bound via `WithClient` / `With`:
+
+```go
+api = api.WithClient(myClient)
+
+ep := api.Endpoints()["users.list"] // however you found it
+name := ep.MethodName()             // e.g. "UsersList"
+
+field := reflect.ValueOf(api).Elem().FieldByName(name)
+fn := field.Interface().(openapi.OpenApiEndpoint)
+
+err := fn(request.Result(&result))
+```
+
+**2. Pass the client through per-call** (works without a bound `*OpenApi`):
+
+```go
+err := openapi.CallEndpoint(ep,
+    request.WithClient(myClient),
+    request.Result(&result),
+)
+```
+
 ### Params vs. headers
 
 Okapi separates spec-declared parameters by location:
