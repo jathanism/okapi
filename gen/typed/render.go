@@ -137,7 +137,11 @@ func (c *` + g.opts.ClientName + `) do(
 ) error {
 	path := pathTemplate
 	for k, v := range pathParams {
-		path = strings.ReplaceAll(path, "{"+k+"}", url.PathEscape(v))
+		// OpenAPI path params are single-segment values, so we escape "/"
+		// in addition to what url.PathEscape covers — otherwise an id
+		// like "a/b" would route to a sibling segment.
+		escaped := strings.ReplaceAll(url.PathEscape(v), "/", "%2F")
+		path = strings.ReplaceAll(path, "{"+k+"}", escaped)
 	}
 	full := c.BaseURL + path
 	if len(query) > 0 {

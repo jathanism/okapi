@@ -121,11 +121,32 @@ func loadSpec(opts Options) (*v3.Document, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse spec: %w", err)
 	}
-	model, errs := doc.BuildV3Model()
-	if errs != nil {
-		return nil, fmt.Errorf("build v3 model: %v", errs)
+
+	// libopenapi can panic when handed YAML that parses but isn't a
+	// recognizable OpenAPI 3 document. Recover so the generator
+	// surfaces a clean error instead of taking the caller down.
+	model, buildErr := buildModel(doc)
+	if buildErr != nil {
+		return nil, fmt.Errorf("build v3 model: %w", buildErr)
+	}
+	if model == nil {
+		return nil, fmt.Errorf("build v3 model: input does not appear to be an OpenAPI 3 document")
 	}
 	return &model.Model, nil
+}
+
+func buildModel(doc libopenapi.Document) (m *libopenapi.DocumentModel[v3.Document], err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("input does not appear to be an OpenAPI 3 document (libopenapi panicked: %v)", r)
+		}
+	}()
+	var rawErr error
+	m, rawErr = doc.BuildV3Model()
+	if rawErr != nil {
+		return nil, rawErr
+	}
+	return m, nil
 }
 
 func formatGo(src string) ([]byte, error) {
