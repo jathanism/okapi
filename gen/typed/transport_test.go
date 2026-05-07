@@ -143,11 +143,8 @@ import (
 func main() {
 	c := NewClient(os.Getenv("BASE"))
 	trace := "t1"
-	r, err := c.CreateThing(context.Background(), CreateThingParams{
-		IdempotencyKey: "key-1",
-		XTrace: &trace,
-		Body: Thing{Id: "abc", Name: "n"},
-	})
+	// CreateThing(ctx, idempotencyKey, xTrace, body)
+	r, err := c.CreateThing(context.Background(), "key-1", &trace, Thing{Id: "abc", Name: "n"})
 	if err != nil { fmt.Println("ERR", err); os.Exit(1) }
 	fmt.Println(r.Id, r.Name)
 }
@@ -186,9 +183,10 @@ import (
 func main() {
 	c := NewClient(os.Getenv("BASE"))
 	cur := "page=2"
-	if _, err := c.GetThing(context.Background(), GetThingParams{
-		Id: "weird id/with slash", Cursor: &cur,
-	}); err != nil { fmt.Println("ERR", err); os.Exit(1) }
+	// GetThing(ctx, id, cursor)
+	if _, err := c.GetThing(context.Background(), "weird id/with slash", &cur); err != nil {
+		fmt.Println("ERR", err); os.Exit(1)
+	}
 }
 `)
 		// Wire form keeps spaces and slash escaped — single path segment.
@@ -243,7 +241,7 @@ import (
 )
 func main() {
 	c := NewClient(os.Getenv("BASE"))
-	if err := c.WipeThing(context.Background(), WipeThingParams{Id: "x"}); err != nil {
+	if err := c.WipeThing(context.Background(), "x"); err != nil {
 		fmt.Println("ERR", err); os.Exit(1)
 	}
 	fmt.Println("OK")
@@ -279,10 +277,10 @@ func main() {
 		"Authorization": []string{"Bearer top-level"},
 		"Idempotency-Key": []string{"will-be-overridden"},
 	}
-	if _, err := c.CreateThing(context.Background(), CreateThingParams{
-		IdempotencyKey: "per-call",
-		Body: Thing{Id: "x", Name: "y"},
-	}); err != nil { fmt.Println("ERR", err); os.Exit(1) }
+	// CreateThing(ctx, idempotencyKey, xTrace, body)
+	if _, err := c.CreateThing(context.Background(), "per-call", nil, Thing{Id: "x", Name: "y"}); err != nil {
+		fmt.Println("ERR", err); os.Exit(1)
+	}
 }
 `)
 		Expect(gotAuth).To(Equal("Bearer top-level"))
@@ -308,7 +306,7 @@ func main() {
 	c := NewClient(os.Getenv("BASE"))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := c.WipeThing(ctx, WipeThingParams{Id: "x"})
+	err := c.WipeThing(ctx, "x")
 	if err == nil {
 		fmt.Println("EXPECTED ERROR"); os.Exit(1)
 	}

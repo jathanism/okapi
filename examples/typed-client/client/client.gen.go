@@ -166,66 +166,48 @@ func formatPathValue(v any) string {
 	}
 }
 
-// CreateItemParams collects the inputs for CreateItem.
-type CreateItemParams struct {
-	IdempotencyKey string         `json:"-" header:"Idempotency-Key"`
-	Body           CreateItemBody `json:"-"`
-}
-
 // Create an item
-func (c *Client) CreateItem(ctx context.Context, params CreateItemParams) (*Item, error) {
+func (c *Client) CreateItem(ctx context.Context, idempotencyKey string, body CreateItemBody) (*Item, error) {
 	pathParams := map[string]string{}
 	query := url.Values{}
 	headers := http.Header{}
 	_ = pathParams
 	_ = query
 	_ = headers
-	headers.Set("Idempotency-Key", formatPathValue(params.IdempotencyKey))
+	headers.Set("Idempotency-Key", formatPathValue(idempotencyKey))
 	var out Item
-	if err := c.do(ctx, "POST", "/items", pathParams, query, headers, params.Body, &out); err != nil {
+	if err := c.do(ctx, "POST", "/items", pathParams, query, headers, body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
-// DeleteItemParams collects the inputs for DeleteItem.
-type DeleteItemParams struct {
-	Id             int64  `json:"-" path:"id"`
-	IdempotencyKey string `json:"-" header:"Idempotency-Key"`
-	IfMatch        string `json:"-" header:"If-Match"`
-}
-
 // Delete an item
-func (c *Client) DeleteItem(ctx context.Context, params DeleteItemParams) error {
+func (c *Client) DeleteItem(ctx context.Context, id int64, idempotencyKey string, ifMatch string) error {
 	pathParams := map[string]string{}
 	query := url.Values{}
 	headers := http.Header{}
 	_ = pathParams
 	_ = query
 	_ = headers
-	pathParams["id"] = formatPathValue(params.Id)
-	headers.Set("Idempotency-Key", formatPathValue(params.IdempotencyKey))
-	headers.Set("If-Match", formatPathValue(params.IfMatch))
+	pathParams["id"] = formatPathValue(id)
+	headers.Set("Idempotency-Key", formatPathValue(idempotencyKey))
+	headers.Set("If-Match", formatPathValue(ifMatch))
 	if err := c.do(ctx, "DELETE", "/items/{id}", pathParams, query, headers, nil, nil); err != nil {
 		return err
 	}
 	return nil
 }
 
-// GetItemParams collects the inputs for GetItem.
-type GetItemParams struct {
-	Id int64 `json:"-" path:"id"`
-}
-
 // Get an item
-func (c *Client) GetItem(ctx context.Context, params GetItemParams) (*Item, error) {
+func (c *Client) GetItem(ctx context.Context, id int64) (*Item, error) {
 	pathParams := map[string]string{}
 	query := url.Values{}
 	headers := http.Header{}
 	_ = pathParams
 	_ = query
 	_ = headers
-	pathParams["id"] = formatPathValue(params.Id)
+	pathParams["id"] = formatPathValue(id)
 	var out Item
 	if err := c.do(ctx, "GET", "/items/{id}", pathParams, query, headers, nil, &out); err != nil {
 		return nil, err
@@ -248,25 +230,19 @@ func (c *Client) Healthz(ctx context.Context) (*Health, error) {
 	return &out, nil
 }
 
-// ListItemsParams collects the inputs for ListItems.
-type ListItemsParams struct {
-	Cursor *string `json:"-" query:"cursor"`
-	Limit  *int64  `json:"-" query:"limit"`
-}
-
 // List items
-func (c *Client) ListItems(ctx context.Context, params ListItemsParams) (*ItemList, error) {
+func (c *Client) ListItems(ctx context.Context, cursor *string, limit *int64) (*ItemList, error) {
 	pathParams := map[string]string{}
 	query := url.Values{}
 	headers := http.Header{}
 	_ = pathParams
 	_ = query
 	_ = headers
-	if params.Limit != nil {
-		query.Set("limit", formatPathValue(*params.Limit))
+	if cursor != nil {
+		query.Set("cursor", formatPathValue(*cursor))
 	}
-	if params.Cursor != nil {
-		query.Set("cursor", formatPathValue(*params.Cursor))
+	if limit != nil {
+		query.Set("limit", formatPathValue(*limit))
 	}
 	var out ItemList
 	if err := c.do(ctx, "GET", "/items", pathParams, query, headers, nil, &out); err != nil {

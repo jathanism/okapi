@@ -75,7 +75,7 @@ explicit in the commit history.
 For the spec in `openapi.yaml`, `okapi-gen-typed` produces:
 
 ```go
-// types.gen.go
+// types.gen.go — body / response payloads only
 type Item struct {
     Id        int64  `json:"id"`
     Name      string `json:"name"`
@@ -88,26 +88,24 @@ type CreateItemBody struct {
 
 // (... Health, ItemList, Problem ...)
 
-// client.gen.go
+// client.gen.go — Client + per-op methods with positional args
 type Client struct { /* BaseURL, *http.Client, DefaultHeaders */ }
 
 func NewClient(baseURL string) *Client
 
 func (c *Client) Healthz(ctx context.Context) (*Health, error)
 
-type ListItemsParams struct {
-    Cursor *string `json:"-" query:"cursor"`
-    Limit  *int64  `json:"-" query:"limit"`
-}
-func (c *Client) ListItems(ctx context.Context, params ListItemsParams) (*ItemList, error)
+// Optional query params are *T — pass nil to omit.
+func (c *Client) ListItems(ctx context.Context, cursor *string, limit *int64) (*ItemList, error)
 
-type CreateItemParams struct {
-    IdempotencyKey string         `json:"-" header:"Idempotency-Key"`
-    Body           CreateItemBody `json:"-"`
-}
-func (c *Client) CreateItem(ctx context.Context, params CreateItemParams) (*Item, error)
+// Required header + body. Removing an arg fails to compile.
+func (c *Client) CreateItem(ctx context.Context, idempotencyKey string, body CreateItemBody) (*Item, error)
 
-// ... GetItem, DeleteItem ...
+// int64 path param.
+func (c *Client) GetItem(ctx context.Context, id int64) (*Item, error)
+
+// Multiple required headers — alphabetical order by Go name.
+func (c *Client) DeleteItem(ctx context.Context, id int64, idempotencyKey string, ifMatch string) error
 
 type APIError struct {
     StatusCode int
@@ -119,11 +117,17 @@ type APIError struct {
 func (e *APIError) Error() string
 ```
 
+The argument order is canonical and stable across regens:
+**ctx → path params (URL-template order) → header params (alphabetical
+by Go name) → query params (alphabetical) → body**. Required scalars
+are values; optional scalars are pointers.
+
 Compile-time guarantees:
 
 - the path param `id` on `GetItem` is `int64`, not a generic
-  string-stringly request param
-- `CreateItem` won't compile without `IdempotencyKey`
+  stringly-typed request param
+- `CreateItem` won't compile without `idempotencyKey` — you can't
+  silently zero-value it the way a struct field would let you
 - the `Idempotency-Key` casing is preserved on the wire
 - `Healthz` returns `*Health`, not `any` — IDE autocomplete works
 

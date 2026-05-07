@@ -148,21 +148,22 @@ var _ = Describe("Generate", func() {
 		// Required scalar stays a value.
 		Expect(types).To(MatchRegexp(`Id\s+int64\s+` + "`" + `json:"id"`))
 
-		// Per-op signatures.
+		// Per-op signatures: positional args, ordered path → header →
+		// query → body. Required scalar = value, optional = pointer.
 		Expect(client).To(ContainSubstring(
-			"func (c *Client) GetContact(ctx context.Context, params GetContactParams) (*Contact, error)"))
+			"func (c *Client) GetContact(ctx context.Context, aid string, ifMatch string) (*Contact, error)"))
 		Expect(client).To(ContainSubstring(
-			"func (c *Client) CreateContact(ctx context.Context, params CreateContactParams) (*Contact, error)"))
+			"func (c *Client) CreateContact(ctx context.Context, aid string, body CreateContactBody) (*Contact, error)"))
 		// Array response stays a slice — return type is a value, not pointer.
 		Expect(client).To(ContainSubstring(
-			"func (c *Client) ListContacts(ctx context.Context, params ListContactsParams) (*[]Contact, error)"))
+			"func (c *Client) ListContacts(ctx context.Context, cursor *string) (*[]Contact, error)"))
 
 		// Header param wired to headers.Set with original case.
 		Expect(client).To(ContainSubstring(
-			`headers.Set("If-Match", formatPathValue(params.IfMatch))`))
+			`headers.Set("If-Match", formatPathValue(ifMatch))`))
 		// Path param wired with the wire name.
 		Expect(client).To(ContainSubstring(
-			`pathParams["aid"] = formatPathValue(params.Aid)`))
+			`pathParams["aid"] = formatPathValue(aid)`))
 	})
 
 	It("produces a package that builds with go build", func() {
@@ -257,10 +258,12 @@ func run() error {
 	c := NewClient(os.Args[1])
 	ctx := context.Background()
 	cur := "abc"
-	if _, err := c.ListContacts(ctx, ListContactsParams{Cursor: &cur}); err != nil {
+	// ListContacts(ctx, cursor *string)
+	if _, err := c.ListContacts(ctx, &cur); err != nil {
 		return fmt.Errorf("list: %w", err)
 	}
-	got, err := c.GetContact(ctx, GetContactParams{Aid: "acc-1", IfMatch: "etag-1"})
+	// GetContact(ctx, aid, ifMatch)
+	got, err := c.GetContact(ctx, "acc-1", "etag-1")
 	if err != nil {
 		return fmt.Errorf("get: %w", err)
 	}

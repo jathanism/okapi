@@ -39,9 +39,11 @@ paths:
       operationId: deleteUser
       responses: {'204': {description: ok}}
 `))
-			Expect(client).To(ContainSubstring("type GetUserParams struct"))
-			Expect(client).To(MatchRegexp(`Aid\s+string\s+` + "`" + `json:"-" path:"aid"`))
-			Expect(client).To(ContainSubstring("type DeleteUserParams struct"))
+			// Path param appears in both methods' signatures.
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) GetUser(ctx context.Context, aid string)"))
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) DeleteUser(ctx context.Context, aid string)"))
 		})
 
 		It("operation-level params override path-level on (name,in) collision", func() {
@@ -63,7 +65,8 @@ paths:
             application/json: {schema: {type: object}}
 `))
 			// Op-level wins: id is int64, not string.
-			Expect(client).To(MatchRegexp(`Id\s+int64`))
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) GetThing(ctx context.Context, id int64)"))
 		})
 
 		It("required header param is a value; optional is a pointer", func() {
@@ -79,8 +82,10 @@ paths:
         - {name: X-Trace, in: header, schema: {type: string}}
       responses: {'204': {description: ok}}
 `))
-			Expect(client).To(MatchRegexp(`IfMatch\s+string\s+` + "`" + `json:"-" header:"If-Match"`))
-			Expect(client).To(MatchRegexp(`XTrace\s+\*string\s+` + "`" + `json:"-" header:"X-Trace"`))
+			// Required header → value; optional → pointer. Header args
+			// are emitted alphabetically by Go name (IfMatch before XTrace).
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) GetX(ctx context.Context, ifMatch string, xTrace *string)"))
 		})
 
 		It("query params with format=int64 become int64", func() {
@@ -95,7 +100,8 @@ paths:
         - {name: limit, in: query, schema: {type: integer, format: int64}}
       responses: {'204': {description: ok}}
 `))
-			Expect(client).To(MatchRegexp(`Limit\s+\*int64`))
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) ListX(ctx context.Context, limit *int64)"))
 		})
 	})
 
@@ -198,7 +204,8 @@ components:
       required: [name]
       properties: {name: {type: string}}
 `))
-			Expect(client).To(MatchRegexp(`Body\s+Req\s+`))
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) CreateX(ctx context.Context, body Req)"))
 		})
 
 		It("optional JSON body becomes *Type", func() {
@@ -218,7 +225,8 @@ components:
       type: object
       properties: {n: {type: string}}
 `))
-			Expect(client).To(MatchRegexp(`Body\s+\*Req\s+`))
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) CreateX(ctx context.Context, body *Req)"))
 		})
 
 		It("non-JSON body content is ignored", func() {
@@ -253,7 +261,7 @@ paths:
         - {name: id, in: path, required: true, schema: {type: integer, format: int64}}
       responses: {'204': {description: ok}}
 `))
-			Expect(client).To(ContainSubstring(`pathParams["id"] = formatPathValue(params.Id)`))
+			Expect(client).To(ContainSubstring(`pathParams["id"] = formatPathValue(id)`))
 		})
 
 		It("encodes optional query params behind a nil-check", func() {
@@ -268,9 +276,9 @@ paths:
         - {name: cursor, in: query, schema: {type: string}}
       responses: {'204': {description: ok}}
 `))
-			Expect(client).To(ContainSubstring("if params.Cursor != nil"))
+			Expect(client).To(ContainSubstring("if cursor != nil"))
 			Expect(client).To(ContainSubstring(
-				`query.Set("cursor", formatPathValue(*params.Cursor))`))
+				`query.Set("cursor", formatPathValue(*cursor))`))
 		})
 
 		It("uses headers.Set for header params, preserving case", func() {
@@ -289,7 +297,7 @@ paths:
       responses: {'201': {description: ok}}
 `))
 			Expect(client).To(ContainSubstring(
-				`headers.Set("Idempotency-Key", formatPathValue(params.IdempotencyKey))`))
+				`headers.Set("Idempotency-Key", formatPathValue(idempotencyKey))`))
 		})
 	})
 })
