@@ -35,43 +35,37 @@ func main() {
 	must("healthz", err)
 	fmt.Printf("[1] healthz: status=%q\n", h.Status)
 
-	// 2) ListItems — optional query params (cursor as *string).
+	// 2) ListItems — optional query params as *T positional args.
+	// Pass nil for any you want to omit; the method body drops the
+	// query key entirely when the arg is nil.
 	cursor := "page-1"
 	limit := int64(10)
-	list, err := c.ListItems(ctx, client.ListItemsParams{Cursor: &cursor, Limit: &limit})
+	list, err := c.ListItems(ctx, &cursor, &limit)
 	must("listItems", err)
 	fmt.Printf("[2] listItems: %d item(s), first=%q\n", len(list.Items), list.Items[0].Name)
 
-	// 3) CreateItem — typed body + required header. The compiler enforces
-	// both; deleting the IdempotencyKey field below makes the build fail.
-	created, err := c.CreateItem(ctx, client.CreateItemParams{
-		IdempotencyKey: "key-1",
-		Body:           client.CreateItemBody{Name: "Sprocket"},
-	})
+	// 3) CreateItem(ctx, idempotencyKey, body) — required header + typed
+	// body as positional args. Removing idempotencyKey makes the build
+	// fail.
+	created, err := c.CreateItem(ctx, "key-1", client.CreateItemBody{Name: "Sprocket"})
 	must("createItem", err)
 	fmt.Printf("[3] createItem: id=%d name=%q\n", created.Id, created.Name)
 
-	// 4) GetItem — int64 path param.
-	got, err := c.GetItem(ctx, client.GetItemParams{Id: created.Id})
+	// 4) GetItem(ctx, id) — int64 path param.
+	got, err := c.GetItem(ctx, created.Id)
 	must("getItem", err)
 	fmt.Printf("[4] getItem(%d): name=%q created_at=%q\n", got.Id, got.Name, got.CreatedAt)
 
-	// 5) DeleteItem — multiple required headers (Idempotency-Key + If-Match).
-	if err := c.DeleteItem(ctx, client.DeleteItemParams{
-		Id:             created.Id,
-		IdempotencyKey: "key-2",
-		IfMatch:        "etag-abc",
-	}); err != nil {
+	// 5) DeleteItem(ctx, id, idempotencyKey, ifMatch) — multiple required
+	// headers, ordered alphabetically by Go name.
+	if err := c.DeleteItem(ctx, created.Id, "key-2", "etag-abc"); err != nil {
 		log.Fatalf("deleteItem: %v", err)
 	}
 	fmt.Printf("[5] deleteItem(%d): 204 No Content\n", created.Id)
 
 	// 6) Negative — server returns 422 when name is empty. Demonstrates
 	// the typed *APIError surface for non-2xx responses.
-	_, err = c.CreateItem(ctx, client.CreateItemParams{
-		IdempotencyKey: "key-3",
-		Body:           client.CreateItemBody{Name: ""},
-	})
+	_, err = c.CreateItem(ctx, "key-3", client.CreateItemBody{Name: ""})
 	var apiErr *client.APIError
 	switch {
 	case errors.As(err, &apiErr):
