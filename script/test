@@ -1,0 +1,269 @@
+#!/usr/bin/env bash
+#
+# script/test - Run the test suite
+#
+# Usage:
+#   script/test              # Run unit tests only
+#   script/test --integration # Run OpenSearch integration tests
+#   script/test --e2e        # Run e2e tests (LocalStack)
+#   script/test --e2e --aws  # Run e2e tests (AWS)
+#   script/test --focus 'pattern'  # Focus on matching specs
+#
+# Environment variables:
+#   QUICK=1      Skip go mod tidy
+#   SKIP_UPDATE=1  Skip go mod tidy
+#   CI=1         Skip go mod tidy
+
+set -euo pipefail
+
+# Script location
+_repo_root() { cd "$(dirname "$0")"/.. && pwd; }
+REPO_ROOT="$(_repo_root)"
+
+# Default settings
+RUN_E2E=false
+RUN_INTEGRATION=false
+E2E_ARGS=()
+GINKGO_ARGS=()
+INTEGRATION_ARGS=()
+FOCUS_PATTERN=""
+VERBOSE=false
+COVERAGE=false
+SKIP_START=false
+
+# Find ginkgo CLI
+_find_ginkgo() {
+	# Check PATH first
+	if command -v ginkgo &>/dev/null; then
+		echo "ginkgo"
+		return
+	fi
+	# Check GOPATH/bin
+	local gopath_bin
+	gopath_bin="$(go env GOPATH)/bin/ginkgo"
+	if [[ -x "$gopath_bin" ]]; then
+		echo "$gopath_bin"
+		return
+	fi
+	# Not found
+	echo ""
+}
+
+# Parse arguments
+parse_args() {
+	while [[ $# -gt 0 ]]; do
+		case $1 in
+		--e2e)
+			RUN_E2E=true
+			shift
+			;;
+		--integration)
+			RUN_INTEGRATION=true
+			shift
+			;;
+		--no-start)
+			SKIP_START=true
+			shift
+			;;
+		--aws | --teardown=* | --clean | -q | --quiet)
+			# Pass through to e2e script
+			E2E_ARGS+=("$1")
+			shift
+			;;
+		--focus)
+			if [[ $# -lt 2 ]]; then
+				echo "Error: --focus requires a pattern argument" >&2
+				exit 1
+			fi
+			FOCUS_PATTERN="$2"
+			shift 2
+			;;
+		--focus=*)
+			FOCUS_PATTERN="${1#--focus=}"
+			shift
+			;;
+		-h | --help)
+			usage
+			exit 0
+			;;
+		-v | --verbose)
+			VERBOSE=true
+			shift
+			;;
+		--cover)
+			COVERAGE=true
+			shift
+			;;
+		--)
+			shift
+			if [[ "$RUN_INTEGRATION" == "true" ]]; then
+				INTEGRATION_ARGS+=("$@")
+			else
+				GINKGO_ARGS+=("$@")
+			fi
+			break
+			;;
+		*)
+			if [[ "$RUN_INTEGRATION" == "true" ]]; then
+				INTEGRATION_ARGS+=("$1")
+			else
+				# Unknown args pass to ginkgo
+				GINKGO_ARGS+=("$1")
+			fi
+			shift
+			;;
+		esac
+	done
+}
+
+usage() {
+	cat <<EOF
+Usage: $(basename "$0") [OPTIONS] [GINKGO_ARGS...]
+
+Run the test suite using Ginkgo CLI.
+
+Options:
+  --integration      Run OpenSearch integration tests
+  --e2e              Run e2e tests instead of unit tests
+  --aws              Use AWS instead of LocalStack (requires --e2e)
+  --teardown=always  Always teardown after e2e tests
+  --teardown=never   Never teardown after e2e tests
+  --clean            Force full initialization (e2e only)
+  -q, --quiet        Suppress output except errors (e2e only)
+  --no-start         Reuse an already-running integration stack
+  --focus PATTERN    Focus on specs matching PATTERN (regex)
+  --cover            Generate coverage report (coverage.out)
+  -v, --verbose      Verbose output
+  -h, --help         Show this help message
+
+Environment Variables:
+  QUICK=1        Skip go mod tidy
+  SKIP_UPDATE=1  Skip go mod tidy
+  CI=1           Skip go mod tidy
+
+Examples:
+  $(basename "$0")                    # Run unit tests
+  $(basename "$0") --cover            # Run unit tests with coverage
+  $(basename "$0") --integration      # Run OpenSearch integration tests
+  $(basename "$0") --e2e              # Run e2e tests (LocalStack, fast path if ready)
+  $(basename "$0") --e2e --clean      # Run e2e tests with full initialization
+  $(basename "$0") --e2e --quiet      # Run e2e tests silently
+  $(basename "$0") --e2e --aws        # Run e2e tests (AWS)
+  $(basename "$0") -v ./pkg/...       # Run unit tests verbosely
+  $(basename "$0") --focus 'getVersion'  # Run specs matching 'getVersion'
+EOF
+}
+
+# Run go mod tidy unless skipped
+_tidy() {
+	if [[ -n "${QUICK:-}" ]] || [[ -n "${SKIP_UPDATE:-}" ]] || [[ -n "${CI:-}" ]]; then
+		return
+	fi
+	go mod tidy
+}
+
+# Run unit tests with ginkgo
+_test() {
+	local ginkgo_cmd
+	ginkgo_cmd="$(_find_ginkgo)"
+
+	if [[ -z "$ginkgo_cmd" ]]; then
+		echo "Error: ginkgo CLI not found. Run ./script/bootstrap to install it." >&2
+		exit 1
+	fi
+
+	# Build ginkgo command args
+	local args=("-r") # Recursive by default
+
+	# Add verbose flag
+	if [[ "$VERBOSE" == "true" ]]; then
+		args+=("-v")
+	fi
+
+	# Add coverage flags
+	if [[ "$COVERAGE" == "true" ]]; then
+		args+=("-coverprofile=coverage.out" "-covermode=atomic")
+	fi
+
+	# Add focus if specified
+	if [[ -n "$FOCUS_PATTERN" ]]; then
+		args+=("--focus" "$FOCUS_PATTERN")
+	fi
+
+	# Add any additional args
+	args+=(${GINKGO_ARGS[@]+"${GINKGO_ARGS[@]}"})
+
+	# Default to all packages if no path specified
+	if [[ ${#GINKGO_ARGS[@]} -eq 0 ]] || ! printf '%s\n' "${GINKGO_ARGS[@]}" | grep -q '^\./\|^\.\.'; then
+		args+=("./...")
+	fi
+
+	"$ginkgo_cmd" "${args[@]}"
+}
+
+# Run e2e tests
+_e2e() {
+	local args=()
+
+	# Add e2e-specific args (--aws, --teardown, etc.)
+	args+=(${E2E_ARGS[@]+"${E2E_ARGS[@]}"})
+
+	# Add verbose flag
+	if [[ "$VERBOSE" == "true" ]]; then
+		args+=("-v")
+	fi
+
+	# Add coverage flag
+	if [[ "$COVERAGE" == "true" ]]; then
+		args+=("--cover")
+	fi
+
+	# Add focus pattern if specified
+	if [[ -n "$FOCUS_PATTERN" ]]; then
+		args+=("--focus" "$FOCUS_PATTERN")
+	fi
+
+	# Add any remaining ginkgo args after --
+	if [[ ${#GINKGO_ARGS[@]} -gt 0 ]]; then
+		args+=("--" "${GINKGO_ARGS[@]}")
+	fi
+
+	"${REPO_ROOT}/script/e2e/test" ${args[@]+"${args[@]}"}
+}
+
+_integration() {
+	local args=()
+
+	if [[ "$SKIP_START" == "true" ]]; then
+		args+=("--no-start")
+	fi
+	if [[ "$VERBOSE" == "true" ]]; then
+		args+=("-v")
+	fi
+	if [[ "$COVERAGE" == "true" ]]; then
+		args+=("--cover")
+	fi
+	if [[ -n "$FOCUS_PATTERN" ]]; then
+		args+=("--focus" "$FOCUS_PATTERN")
+	fi
+	if [[ ${#INTEGRATION_ARGS[@]} -gt 0 ]]; then
+		args+=("--" "${INTEGRATION_ARGS[@]}")
+	fi
+
+	"${REPO_ROOT}/script/integration/test" ${args[@]+"${args[@]}"}
+}
+
+main() {
+	parse_args "$@"
+
+	if [[ "$RUN_E2E" == "true" ]]; then
+		_e2e
+	elif [[ "$RUN_INTEGRATION" == "true" ]]; then
+		_integration
+	else
+		_tidy
+		_test
+	fi
+}
+
+main "$@"

@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  workflow_call:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.event.number || 'main' }}
+  cancel-in-progress: true
+
+env:
+  GOPRIVATE: github.com/textla/*
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: ".go-version"
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - uses: j178/prek-action@53276d8b0d10f8b6672aa85b4588c6921d0370cc # v2
+
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: ".go-version"
+      - name: Install Ginkgo
+        run: go install github.com/onsi/ginkgo/v2/ginkgo@latest
+      - name: Run tests with coverage
+        run: ./script/test --cover
+      - name: Check coverage threshold
+        run: |
+          coverage=$(go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}')
+          echo "Coverage: ${coverage}%"
+          # TODO(jathan): Uncomment this once we have working code.
+          # if (( $(echo "$coverage < 80" | bc -l) )); then
+          #   echo "Coverage ${coverage}% is below threshold of 80%"
+          #   exit 1
+          # fi

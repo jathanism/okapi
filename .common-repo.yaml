@@ -1,0 +1,7 @@
+- repo:
+    url: https://github.com/common-repo/semantic-release
+    ref: v0.6.3
+- template-vars:
+    GH_APP_ID_SECRET: JATHY_BOT_APP_ID
+    GH_APP_KEY_SECRET: JATHY_BOT_PRIVATE_KY
+    GH_APP_OWNER: jathanism
