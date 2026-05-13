@@ -319,4 +319,3 @@ func main() {
 		Expect(strings.TrimSpace(out)).To(Equal("OK"))
 	})
 })
-
