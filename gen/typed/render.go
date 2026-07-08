@@ -94,6 +94,7 @@ func (g *generator) renderClient() (string, error) {
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -116,13 +117,19 @@ func New` + g.opts.ClientName + `(baseURL string) *` + g.opts.ClientName + ` {
 }
 
 // APIError is returned for non-2xx responses. It captures the HTTP
-// status, the raw response body, and any decoded JSON payload.
+// status, the raw response body, and — for JSON error bodies — the
+// decoded RFC 7807 problem details.
 type APIError struct {
 	StatusCode int
 	Status     string
 	Method     string
 	URL        string
 	Body       []byte
+	// Problem holds the decoded RFC 7807 payload when the response
+	// carried application/problem+json (or application/json) and the
+	// body parsed as a JSON object. nil otherwise; Body always keeps
+	// the raw bytes either way.
+	Problem *APIProblem
 }
 
 func (e *APIError) Error() string {
@@ -130,6 +137,63 @@ func (e *APIError) Error() string {
 		return fmt.Sprintf("%s %s: %s: %s", e.Method, e.URL, e.Status, string(e.Body))
 	}
 	return fmt.Sprintf("%s %s: %s", e.Method, e.URL, e.Status)
+}
+
+// APIProblem is an RFC 7807 "problem details" object. Members beyond
+// the five standard ones are preserved in Extensions as raw JSON.
+type APIProblem struct {
+	Type     string ` + "`" + `json:"type,omitempty"` + "`" + `
+	Title    string ` + "`" + `json:"title,omitempty"` + "`" + `
+	Status   int    ` + "`" + `json:"status,omitempty"` + "`" + `
+	Detail   string ` + "`" + `json:"detail,omitempty"` + "`" + `
+	Instance string ` + "`" + `json:"instance,omitempty"` + "`" + `
+
+	// Extensions holds any non-standard members (e.g. a per-field
+	// "errors" array) keyed by member name.
+	Extensions map[string]json.RawMessage ` + "`" + `json:"-"` + "`" + `
+}
+
+// UnmarshalJSON decodes the standard RFC 7807 members and captures
+// everything else in Extensions.
+func (p *APIProblem) UnmarshalJSON(data []byte) error {
+	type plain APIProblem
+	var std plain
+	if err := json.Unmarshal(data, &std); err != nil {
+		return err
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(data, &members); err != nil {
+		return err
+	}
+	for _, k := range []string{"type", "title", "status", "detail", "instance"} {
+		delete(members, k)
+	}
+	if len(members) > 0 {
+		std.Extensions = members
+	}
+	*p = APIProblem(std)
+	return nil
+}
+
+// newAPIError builds the error for a non-2xx response, best-effort
+// decoding an RFC 7807 problem body. A malformed problem body never
+// masks the HTTP error: Body always carries the raw bytes.
+func newAPIError(resp *http.Response, method, url string, body []byte) *APIError {
+	apiErr := &APIError{
+		StatusCode: resp.StatusCode,
+		Status:     resp.Status,
+		Method:     method,
+		URL:        url,
+		Body:       body,
+	}
+	mt, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err == nil && (mt == "application/problem+json" || mt == "application/json") {
+		var prob APIProblem
+		if json.Unmarshal(body, &prob) == nil {
+			apiErr.Problem = &prob
+		}
+	}
+	return apiErr
 }
 
 // httpClient returns c.HTTP or http.DefaultClient.
@@ -198,13 +262,7 @@ func (c *` + g.opts.ClientName + `) send(
 		if err != nil {
 			return nil, fmt.Errorf("read response: %w", err)
 		}
-		return nil, &APIError{
-			StatusCode: resp.StatusCode,
-			Status:     resp.Status,
-			Method:     method,
-			URL:        full,
-			Body:       respBody,
-		}
+		return nil, newAPIError(resp, method, full, respBody)
 	}
 	return resp, nil
 }

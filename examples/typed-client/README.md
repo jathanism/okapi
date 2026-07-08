@@ -40,7 +40,7 @@ Expected output:
 [5] deleteItem(2): 204 No Content
 [6] exportItems: 17 bytes of csv, header "id,name"
 [7] importItems: 204 No Content
-[8] empty name → APIError(422) {"detail":"name is required","status":422,"title":"Unprocessable Entity"}
+[8] empty name → APIError(422) title="Unprocessable Entity" detail="name is required"
 
 All eight interactions succeeded.
 ```
@@ -127,6 +127,7 @@ type APIError struct {
     Method     string
     URL        string
     Body       []byte
+    Problem    *APIProblem // decoded RFC 7807 body, when present
 }
 func (e *APIError) Error() string
 ```
@@ -147,12 +148,19 @@ Compile-time guarantees:
 
 Non-2xx server responses surface as `*APIError`; transport-level
 failures (DNS, connection refused, ctx cancellation) come back as
-plain wrapped errors. Use `errors.As` to discriminate:
+plain wrapped errors. Use `errors.As` to discriminate. When the error
+body is `application/problem+json` (or plain JSON), the RFC 7807
+members are decoded onto `apiErr.Problem` — the raw bytes stay on
+`apiErr.Body` either way:
 
 ```go
 var apiErr *client.APIError
 if errors.As(err, &apiErr) {
-    log.Printf("api %d: %s", apiErr.StatusCode, apiErr.Body)
+    if apiErr.Problem != nil {
+        log.Printf("api %d %s: %s", apiErr.StatusCode, apiErr.Problem.Title, apiErr.Problem.Detail)
+    } else {
+        log.Printf("api %d: %s", apiErr.StatusCode, apiErr.Body)
+    }
 }
 ```
 
