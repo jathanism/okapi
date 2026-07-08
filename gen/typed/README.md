@@ -87,15 +87,43 @@ substituted with `url.PathEscape`.
 - `required: [...]` → controls pointer vs value, and `omitempty` JSON tag
 - Path-item-level parameters merged into operation-level (op-level wins
   on collisions, per OpenAPI 3)
-- Request bodies: `application/json` only
-- Responses: first 2xx with `application/json`; non-2xx returns a typed
-  `*APIError` carrying status code and raw body
+- Request bodies: `application/json` (typed struct), plus binary media
+  streamed from an `io.Reader` (see below)
+- Responses: first 2xx with `application/json`; non-JSON 2xx content is
+  streamed as an `io.ReadCloser`; non-2xx returns a typed `*APIError`
+  carrying status code and raw body
+
+### Non-JSON request and response bodies
+
+Binary request bodies — `application/octet-stream`, or any non-JSON
+media type whose schema is `type: string, format: binary` — become an
+`io.Reader` argument. The reader is handed straight to the transport
+(no buffering) and the declared media type is sent as `Content-Type`:
+
+```go
+// requestBody: {content: {application/octet-stream: {}}}
+func (c *Client) ImportItems(ctx context.Context, body io.Reader) error
+```
+
+When an operation's 2xx response declares only non-JSON content (e.g.
+`text/csv`, `application/octet-stream` — including the bare
+`text/csv: {}` empty-schema form), the method returns the raw response
+body instead of decoding it. The caller must close it:
+
+```go
+// responses: {'200': {content: {text/csv: {}}}}
+func (c *Client) ExportItems(ctx context.Context) (io.ReadCloser, error)
+```
+
+The declared media type is also sent as the default `Accept` header.
+Operations whose 2xx declares both `application/json` and non-JSON
+content keep the decoded-JSON shape.
 
 ## What's not supported (yet)
 
 - `oneOf` / `anyOf` / multi-member `allOf` — these collapse to `any`.
   Single-member `allOf` is unwrapped.
-- Non-JSON request/response content (e.g. `text/csv`, `multipart`)
+- `multipart/form-data` request bodies
 - Header parameters in responses (we only decode the body)
 - Authentication helpers — set `Client.DefaultHeaders` or wrap
   `*http.Client` for auth, tracing, and retries.

@@ -11,17 +11,18 @@ in your own service, or when you want to see what the generated
 output looks like for a tiny but realistic spec.
 
 The dynamic-dispatch counterpart (no codegen, runtime spec parsing)
-is in [`../client-test`](../client-test). They use the **same
-spec** so you can diff the call shapes side-by-side.
+is in [`../client-test`](../client-test). This spec is a superset of
+the `client-test` one (it adds streamed CSV export/import), so you
+can still diff the shared call shapes side-by-side.
 
 ## What's in here
 
 | File | Purpose |
 | --- | --- |
-| [`openapi.yaml`](openapi.yaml) | Tiny five-endpoint Items API. Covers query, path, and header params, required body fields, and a 422 problem response. Same spec as `client-test/`. |
+| [`openapi.yaml`](openapi.yaml) | Tiny seven-operation Items API. Covers query, path, and header params, required body fields, streamed CSV export/import, and a 422 problem response. |
 | [`client/`](client) | **Generator output** — `types.gen.go` (typed structs) + `client.gen.go` (typed `*Client` with one method per operation). Committed; regenerate via `go generate`. |
 | [`server.go`](server.go) | A canned `httptest` server implementing the spec. |
-| [`main.go`](main.go) | The runner. Drives `Healthz`, `ListItems`, `CreateItem`, `GetItem`, `DeleteItem`, and a 422 negative path through the typed client. |
+| [`main.go`](main.go) | The runner. Drives `Healthz`, `ListItems`, `CreateItem`, `GetItem`, `DeleteItem`, `ExportItems`, `ImportItems`, and a 422 negative path through the typed client. |
 
 ## Run it
 
@@ -37,9 +38,11 @@ Expected output:
 [3] createItem: id=2 name="Sprocket"
 [4] getItem(2): name="Widget" created_at="2026-01-01T00:00:00Z"
 [5] deleteItem(2): 204 No Content
-[6] empty name → APIError(422) {"detail":"name is required","status":422,"title":"Unprocessable Entity"}
+[6] exportItems: 17 bytes of csv, header "id,name"
+[7] importItems: 204 No Content
+[8] empty name → APIError(422) {"detail":"name is required","status":422,"title":"Unprocessable Entity"}
 
-All six interactions succeeded.
+All eight interactions succeeded.
 ```
 
 ## Regenerate after a spec change
@@ -106,6 +109,12 @@ func (c *Client) GetItem(ctx context.Context, id int64) (*Item, error)
 
 // Multiple required headers — alphabetical order by Go name.
 func (c *Client) DeleteItem(ctx context.Context, id int64, idempotencyKey string, ifMatch string) error
+
+// text/csv response — streamed back as an io.ReadCloser (caller closes).
+func (c *Client) ExportItems(ctx context.Context) (io.ReadCloser, error)
+
+// application/octet-stream request body — streamed from any io.Reader.
+func (c *Client) ImportItems(ctx context.Context, body io.Reader) error
 
 type APIError struct {
     StatusCode int

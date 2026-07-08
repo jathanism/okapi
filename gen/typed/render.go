@@ -140,18 +140,19 @@ func (c *` + g.opts.ClientName + `) httpClient() *http.Client {
 	return http.DefaultClient
 }
 
-// do is the shared transport for every typed method. Its signature is
+// send builds and issues one HTTP request and maps non-2xx responses
+// to *APIError. On success the caller owns resp.Body. Its signature is
 // what couples the generated methods to the manual transport plumbing —
 // keep it stable.
-func (c *` + g.opts.ClientName + `) do(
+func (c *` + g.opts.ClientName + `) send(
 	ctx context.Context,
 	method, pathTemplate string,
 	pathParams map[string]string,
 	query url.Values,
 	headers http.Header,
-	body any,
-	out any,
-) error {
+	body io.Reader,
+	contentType, accept string,
+) (*http.Response, error) {
 	path := pathTemplate
 	for k, v := range pathParams {
 		// OpenAPI path params are single-segment values, so we escape "/"
@@ -165,18 +166,9 @@ func (c *` + g.opts.ClientName + `) do(
 		full += "?" + query.Encode()
 	}
 
-	var reader io.Reader
-	if body != nil {
-		buf, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("encode body: %w", err)
-		}
-		reader = bytes.NewReader(buf)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, full, reader)
+	req, err := http.NewRequestWithContext(ctx, method, full, body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for k, vv := range c.DefaultHeaders {
 		for _, v := range vv {
@@ -189,13 +181,47 @@ func (c *` + g.opts.ClientName + `) do(
 		}
 	}
 	if body != nil && req.Header.Get("Content-Type") == "" {
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", contentType)
 	}
 	if req.Header.Get("Accept") == "" {
-		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Accept", accept)
 	}
 
 	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+		return nil, &APIError{
+			StatusCode: resp.StatusCode,
+			Status:     resp.Status,
+			Method:     method,
+			URL:        full,
+			Body:       respBody,
+		}
+	}
+	return resp, nil
+}
+
+// do issues a request and decodes the JSON response body into out
+// (skipped when out is nil or the body is empty).
+func (c *` + g.opts.ClientName + `) do(
+	ctx context.Context,
+	method, pathTemplate string,
+	pathParams map[string]string,
+	query url.Values,
+	headers http.Header,
+	body io.Reader,
+	contentType, accept string,
+	out any,
+) error {
+	resp, err := c.send(ctx, method, pathTemplate, pathParams, query, headers, body, contentType, accept)
 	if err != nil {
 		return err
 	}
@@ -205,17 +231,6 @@ func (c *` + g.opts.ClientName + `) do(
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
 	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &APIError{
-			StatusCode: resp.StatusCode,
-			Status:     resp.Status,
-			Method:     method,
-			URL:        full,
-			Body:       respBody,
-		}
-	}
-
 	if out == nil || len(respBody) == 0 {
 		return nil
 	}
@@ -223,6 +238,35 @@ func (c *` + g.opts.ClientName + `) do(
 		return fmt.Errorf("decode response: %w", err)
 	}
 	return nil
+}
+
+// doStream issues a request and hands the raw response body back to
+// the caller, who must close it.
+func (c *` + g.opts.ClientName + `) doStream(
+	ctx context.Context,
+	method, pathTemplate string,
+	pathParams map[string]string,
+	query url.Values,
+	headers http.Header,
+	body io.Reader,
+	contentType, accept string,
+) (io.ReadCloser, error) {
+	resp, err := c.send(ctx, method, pathTemplate, pathParams, query, headers, body, contentType, accept)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Body, nil
+}
+
+// jsonBody marshals v into an in-memory reader for the request body.
+// Generated methods with a JSON request body funnel through here so
+// send can treat every body as a plain io.Reader.
+func jsonBody(v any) (io.Reader, error) {
+	buf, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("encode body: %w", err)
+	}
+	return bytes.NewReader(buf), nil
 }
 
 // formatPathValue renders a primitive into a path/query string. Enums
@@ -348,22 +392,49 @@ func argFromParam(p *paramField) orderedArg {
 func renderOpMethod(b *strings.Builder, op *operation, clientName string) {
 	args := orderArgs(op)
 
-	// Doc
+	// Doc: the spec's summary/description, plus streaming contracts.
+	docParas := []string{}
 	if op.Doc != "" {
-		for _, line := range strings.Split(op.Doc, "\n") {
-			fmt.Fprintf(b, "// %s\n", line)
+		docParas = append(docParas, op.Doc)
+	}
+	if op.BodyStream {
+		docParas = append(docParas,
+			fmt.Sprintf("The request body is streamed as %s; it is not buffered.", op.BodyMedia))
+	}
+	if op.ResultStream {
+		docParas = append(docParas, fmt.Sprintf(
+			"The returned io.ReadCloser streams the raw %s response body;\nthe caller must close it.",
+			op.ResultMedia))
+	}
+	if doc := strings.Join(docParas, "\n\n"); doc != "" {
+		for _, line := range strings.Split(doc, "\n") {
+			fmt.Fprintf(b, "%s\n", strings.TrimRight("// "+line, " "))
 		}
 	}
+
+	// Return list: result (JSON *T or streamed io.ReadCloser), then error.
+	// zeroRets are the non-error return values on the error path.
+	var retTypes, zeroRets []string
+	switch {
+	case op.HasResult:
+		retTypes = append(retTypes, "*"+strings.TrimPrefix(op.ResultType, "*"))
+		zeroRets = append(zeroRets, "nil")
+	case op.ResultStream:
+		retTypes = append(retTypes, "io.ReadCloser")
+		zeroRets = append(zeroRets, "nil")
+	}
+	retTypes = append(retTypes, "error")
+	ret := retTypes[0]
+	if len(retTypes) > 1 {
+		ret = "(" + strings.Join(retTypes, ", ") + ")"
+	}
+	errReturn := strings.Join(append(append([]string{}, zeroRets...), "err"), ", ")
 
 	// Signature.
 	var sigArgs []string
 	sigArgs = append(sigArgs, "ctx context.Context")
 	for _, a := range args {
 		sigArgs = append(sigArgs, fmt.Sprintf("%s %s", a.ArgName, a.GoType))
-	}
-	ret := "error"
-	if op.HasResult {
-		ret = fmt.Sprintf("(*%s, error)", strings.TrimPrefix(op.ResultType, "*"))
 	}
 	fmt.Fprintf(b, "func (c *%s) %s(%s) %s {\n",
 		clientName, op.GoName, strings.Join(sigArgs, ", "), ret)
@@ -396,26 +467,47 @@ func renderOpMethod(b *strings.Builder, op *operation, clientName string) {
 		}
 	}
 
-	// Body / result / do().
+	// Body: JSON bodies are pre-encoded so the transport only ever sees
+	// an io.Reader; streamed bodies pass through with their media type.
 	bodyArg := "nil"
-	if op.HasBody {
+	contentType := `""`
+	switch {
+	case op.HasBody && op.BodyJSON:
+		fmt.Fprintf(b, "\tbodyReader, err := jsonBody(body)\n\tif err != nil {\n\t\treturn %s\n\t}\n", errReturn)
+		bodyArg = "bodyReader"
+		contentType = `"application/json"`
+	case op.HasBody && op.BodyStream:
 		bodyArg = "body"
+		contentType = fmt.Sprintf("%q", op.BodyMedia)
 	}
-	resultArg := "nil"
-	if op.HasResult {
-		b.WriteString("\tvar out " + strings.TrimPrefix(op.ResultType, "*") + "\n")
-		resultArg = "&out"
+	accept := `"application/json"`
+	if op.ResultStream {
+		accept = fmt.Sprintf("%q", op.ResultMedia)
 	}
 
-	fmt.Fprintf(b,
-		"\tif err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s); err != nil {\n",
-		op.Method, op.Path, bodyArg, resultArg,
-	)
-	if op.HasResult {
-		b.WriteString("\t\treturn nil, err\n\t}\n")
+	// Result / transport call.
+	switch {
+	case op.ResultStream:
+		fmt.Fprintf(b,
+			"\trespBody, err := c.doStream(ctx, %q, %q, pathParams, query, headers, %s, %s, %s)\n",
+			op.Method, op.Path, bodyArg, contentType, accept,
+		)
+		fmt.Fprintf(b, "\tif err != nil {\n\t\treturn %s\n\t}\n", errReturn)
+		b.WriteString("\treturn respBody, nil\n")
+	case op.HasResult:
+		b.WriteString("\tvar out " + strings.TrimPrefix(op.ResultType, "*") + "\n")
+		fmt.Fprintf(b,
+			"\tif err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s, %s, &out); err != nil {\n",
+			op.Method, op.Path, bodyArg, contentType, accept,
+		)
+		fmt.Fprintf(b, "\t\treturn %s\n\t}\n", errReturn)
 		b.WriteString("\treturn &out, nil\n")
-	} else {
-		b.WriteString("\t\treturn err\n\t}\n")
+	default:
+		fmt.Fprintf(b,
+			"\tif err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s, %s, nil); err != nil {\n",
+			op.Method, op.Path, bodyArg, contentType, accept,
+		)
+		fmt.Fprintf(b, "\t\treturn %s\n\t}\n", errReturn)
 		b.WriteString("\treturn nil\n")
 	}
 	b.WriteString("}\n\n")
