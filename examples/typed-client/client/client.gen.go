@@ -126,7 +126,8 @@ func (c *Client) send(
 }
 
 // do issues a request and decodes the JSON response body into out
-// (skipped when out is nil or the body is empty).
+// (skipped when out is nil or the body is empty). The response headers
+// are returned so methods can surface declared ones.
 func (c *Client) do(
 	ctx context.Context,
 	method, pathTemplate string,
@@ -136,24 +137,24 @@ func (c *Client) do(
 	body io.Reader,
 	contentType, accept string,
 	out any,
-) error {
+) (http.Header, error) {
 	resp, err := c.send(ctx, method, pathTemplate, pathParams, query, headers, body, contentType, accept)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("read response: %w", err)
+		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if out == nil || len(respBody) == 0 {
-		return nil
+		return resp.Header, nil
 	}
 	if err := json.Unmarshal(respBody, out); err != nil {
-		return fmt.Errorf("decode response: %w", err)
+		return nil, fmt.Errorf("decode response: %w", err)
 	}
-	return nil
+	return resp.Header, nil
 }
 
 // doStream issues a request and hands the raw response body back to
@@ -166,12 +167,12 @@ func (c *Client) doStream(
 	headers http.Header,
 	body io.Reader,
 	contentType, accept string,
-) (io.ReadCloser, error) {
+) (io.ReadCloser, http.Header, error) {
 	resp, err := c.send(ctx, method, pathTemplate, pathParams, query, headers, body, contentType, accept)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return resp.Body, nil
+	return resp.Body, resp.Header, nil
 }
 
 // jsonBody marshals v into an in-memory reader for the request body.
@@ -224,7 +225,7 @@ func (c *Client) CreateItem(ctx context.Context, idempotencyKey string, body Cre
 		return nil, err
 	}
 	var out Item
-	if err := c.do(ctx, "POST", "/items", pathParams, query, headers, bodyReader, "application/json", "application/json", &out); err != nil {
+	if _, err := c.do(ctx, "POST", "/items", pathParams, query, headers, bodyReader, "application/json", "application/json", &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -241,7 +242,7 @@ func (c *Client) DeleteItem(ctx context.Context, id int64, idempotencyKey string
 	pathParams["id"] = formatPathValue(id)
 	headers.Set("Idempotency-Key", formatPathValue(idempotencyKey))
 	headers.Set("If-Match", formatPathValue(ifMatch))
-	if err := c.do(ctx, "DELETE", "/items/{id}", pathParams, query, headers, nil, "", "application/json", nil); err != nil {
+	if _, err := c.do(ctx, "DELETE", "/items/{id}", pathParams, query, headers, nil, "", "application/json", nil); err != nil {
 		return err
 	}
 	return nil
@@ -258,15 +259,24 @@ func (c *Client) ExportItems(ctx context.Context) (io.ReadCloser, error) {
 	_ = pathParams
 	_ = query
 	_ = headers
-	respBody, err := c.doStream(ctx, "GET", "/items/export", pathParams, query, headers, nil, "", "text/csv")
+	respBody, _, err := c.doStream(ctx, "GET", "/items/export", pathParams, query, headers, nil, "", "text/csv")
 	if err != nil {
 		return nil, err
 	}
 	return respBody, nil
 }
 
+// GetItemResponseHeaders carries the response headers declared on GetItem's
+// success response. Headers absent from the response are left as zero
+// values.
+type GetItemResponseHeaders struct {
+	CacheControl string
+	// Entity tag for the returned item
+	Etag string
+}
+
 // Get an item
-func (c *Client) GetItem(ctx context.Context, id int64) (*Item, error) {
+func (c *Client) GetItem(ctx context.Context, id int64) (*Item, GetItemResponseHeaders, error) {
 	pathParams := map[string]string{}
 	query := url.Values{}
 	headers := http.Header{}
@@ -275,10 +285,14 @@ func (c *Client) GetItem(ctx context.Context, id int64) (*Item, error) {
 	_ = headers
 	pathParams["id"] = formatPathValue(id)
 	var out Item
-	if err := c.do(ctx, "GET", "/items/{id}", pathParams, query, headers, nil, "", "application/json", &out); err != nil {
-		return nil, err
+	respHeader, err := c.do(ctx, "GET", "/items/{id}", pathParams, query, headers, nil, "", "application/json", &out)
+	if err != nil {
+		return nil, GetItemResponseHeaders{}, err
 	}
-	return &out, nil
+	outHeaders := GetItemResponseHeaders{}
+	outHeaders.CacheControl = respHeader.Get("Cache-Control")
+	outHeaders.Etag = respHeader.Get("ETag")
+	return &out, outHeaders, nil
 }
 
 // Liveness check
@@ -290,7 +304,7 @@ func (c *Client) Healthz(ctx context.Context) (*Health, error) {
 	_ = query
 	_ = headers
 	var out Health
-	if err := c.do(ctx, "GET", "/healthz", pathParams, query, headers, nil, "", "application/json", &out); err != nil {
+	if _, err := c.do(ctx, "GET", "/healthz", pathParams, query, headers, nil, "", "application/json", &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -306,7 +320,7 @@ func (c *Client) ImportItems(ctx context.Context, body io.Reader) error {
 	_ = pathParams
 	_ = query
 	_ = headers
-	if err := c.do(ctx, "POST", "/items/import", pathParams, query, headers, body, "application/octet-stream", "application/json", nil); err != nil {
+	if _, err := c.do(ctx, "POST", "/items/import", pathParams, query, headers, body, "application/octet-stream", "application/json", nil); err != nil {
 		return err
 	}
 	return nil
@@ -327,7 +341,7 @@ func (c *Client) ListItems(ctx context.Context, cursor *string, limit *int64) (*
 		query.Set("limit", formatPathValue(*limit))
 	}
 	var out ItemList
-	if err := c.do(ctx, "GET", "/items", pathParams, query, headers, nil, "", "application/json", &out); err != nil {
+	if _, err := c.do(ctx, "GET", "/items", pathParams, query, headers, nil, "", "application/json", &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

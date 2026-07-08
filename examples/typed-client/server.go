@@ -75,6 +75,8 @@ func newFakeServer() *httptest.Server {
 		}
 		switch r.Method {
 		case http.MethodGet:
+			w.Header().Set("ETag", `"item-`+idStr+`-v1"`)
+			w.Header().Set("Cache-Control", "max-age=60")
 			writeJSON(w, http.StatusOK, sampleItem(id, "Widget"))
 		case http.MethodDelete:
 			if r.Header.Get("Idempotency-Key") == "" || r.Header.Get("If-Match") == "" {

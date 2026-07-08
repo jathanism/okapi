@@ -92,6 +92,8 @@ substituted with `url.PathEscape`.
 - Responses: first 2xx with `application/json`; non-JSON 2xx content is
   streamed as an `io.ReadCloser`; non-2xx returns a typed `*APIError`
   carrying status code and raw body
+- Response headers declared on the success response → a typed
+  `<Op>ResponseHeaders` struct returned alongside the body
 
 ### Non-JSON request and response bodies
 
@@ -119,12 +121,44 @@ The declared media type is also sent as the default `Accept` header.
 Operations whose 2xx declares both `application/json` and non-JSON
 content keep the decoded-JSON shape.
 
+### Typed response headers
+
+When an operation's success response declares `headers:`, the generator
+emits a per-operation struct (fields alphabetical by Go name, derived
+the same way parameter names are) and the method returns it as an
+additional value, just before the error:
+
+```yaml
+responses:
+  '200':
+    headers:
+      ETag: {schema: {type: string}}
+      Cache-Control: {schema: {type: string}}
+    content:
+      application/json:
+        schema: {$ref: '#/components/schemas/Item'}
+```
+
+```go
+type GetItemResponseHeaders struct {
+    CacheControl string
+    Etag         string
+}
+
+func (c *Client) GetItem(ctx context.Context, id int64) (*Item, GetItemResponseHeaders, error)
+```
+
+Header values map through the same schema→Go-type logic as parameters;
+non-string primitives (e.g. `type: integer`) parse best-effort, and a
+missing or malformed value leaves the field at its zero value. Only
+operations that declare response headers change shape — everything
+else keeps the plain `(*T, error)` / `error` signatures.
+
 ## What's not supported (yet)
 
 - `oneOf` / `anyOf` / multi-member `allOf` — these collapse to `any`.
   Single-member `allOf` is unwrapped.
 - `multipart/form-data` request bodies
-- Header parameters in responses (we only decode the body)
 - Authentication helpers — set `Client.DefaultHeaders` or wrap
   `*http.Client` for auth, tracing, and retries.
 

@@ -210,7 +210,8 @@ func (c *` + g.opts.ClientName + `) send(
 }
 
 // do issues a request and decodes the JSON response body into out
-// (skipped when out is nil or the body is empty).
+// (skipped when out is nil or the body is empty). The response headers
+// are returned so methods can surface declared ones.
 func (c *` + g.opts.ClientName + `) do(
 	ctx context.Context,
 	method, pathTemplate string,
@@ -220,24 +221,24 @@ func (c *` + g.opts.ClientName + `) do(
 	body io.Reader,
 	contentType, accept string,
 	out any,
-) error {
+) (http.Header, error) {
 	resp, err := c.send(ctx, method, pathTemplate, pathParams, query, headers, body, contentType, accept)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("read response: %w", err)
+		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if out == nil || len(respBody) == 0 {
-		return nil
+		return resp.Header, nil
 	}
 	if err := json.Unmarshal(respBody, out); err != nil {
-		return fmt.Errorf("decode response: %w", err)
+		return nil, fmt.Errorf("decode response: %w", err)
 	}
-	return nil
+	return resp.Header, nil
 }
 
 // doStream issues a request and hands the raw response body back to
@@ -250,12 +251,12 @@ func (c *` + g.opts.ClientName + `) doStream(
 	headers http.Header,
 	body io.Reader,
 	contentType, accept string,
-) (io.ReadCloser, error) {
+) (io.ReadCloser, http.Header, error) {
 	resp, err := c.send(ctx, method, pathTemplate, pathParams, query, headers, body, contentType, accept)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return resp.Body, nil
+	return resp.Body, resp.Header, nil
 }
 
 // jsonBody marshals v into an in-memory reader for the request body.
@@ -392,6 +393,19 @@ func argFromParam(p *paramField) orderedArg {
 func renderOpMethod(b *strings.Builder, op *operation, clientName string) {
 	args := orderArgs(op)
 
+	// Response headers struct, declared next to the method that
+	// returns it.
+	if op.HeadersName != "" {
+		fmt.Fprintf(b, "// %s carries the response headers declared on %s's\n", op.HeadersName, op.GoName)
+		b.WriteString("// success response. Headers absent from the response are left as zero\n// values.\n")
+		fmt.Fprintf(b, "type %s struct {\n", op.HeadersName)
+		for _, h := range op.RespHeaders {
+			renderFieldDoc(b, h.Doc)
+			fmt.Fprintf(b, "\t%s %s\n", h.GoName, h.GoType)
+		}
+		b.WriteString("}\n\n")
+	}
+
 	// Doc: the spec's summary/description, plus streaming contracts.
 	docParas := []string{}
 	if op.Doc != "" {
@@ -412,8 +426,9 @@ func renderOpMethod(b *strings.Builder, op *operation, clientName string) {
 		}
 	}
 
-	// Return list: result (JSON *T or streamed io.ReadCloser), then error.
-	// zeroRets are the non-error return values on the error path.
+	// Return list: result (JSON *T or streamed io.ReadCloser), then the
+	// declared-headers struct, then error. zeroRets are the non-error
+	// return values on the error path.
 	var retTypes, zeroRets []string
 	switch {
 	case op.HasResult:
@@ -422,6 +437,10 @@ func renderOpMethod(b *strings.Builder, op *operation, clientName string) {
 	case op.ResultStream:
 		retTypes = append(retTypes, "io.ReadCloser")
 		zeroRets = append(zeroRets, "nil")
+	}
+	if op.HeadersName != "" {
+		retTypes = append(retTypes, op.HeadersName)
+		zeroRets = append(zeroRets, op.HeadersName+"{}")
 	}
 	retTypes = append(retTypes, "error")
 	ret := retTypes[0]
@@ -485,32 +504,88 @@ func renderOpMethod(b *strings.Builder, op *operation, clientName string) {
 		accept = fmt.Sprintf("%q", op.ResultMedia)
 	}
 
-	// Result / transport call.
+	// Result / transport call. okRets accumulates the values returned on
+	// the success path, in signature order.
+	var okRets []string
 	switch {
 	case op.ResultStream:
+		headerVar := "_"
+		if op.HeadersName != "" {
+			headerVar = "respHeader"
+		}
 		fmt.Fprintf(b,
-			"\trespBody, err := c.doStream(ctx, %q, %q, pathParams, query, headers, %s, %s, %s)\n",
-			op.Method, op.Path, bodyArg, contentType, accept,
+			"\trespBody, %s, err := c.doStream(ctx, %q, %q, pathParams, query, headers, %s, %s, %s)\n",
+			headerVar, op.Method, op.Path, bodyArg, contentType, accept,
 		)
 		fmt.Fprintf(b, "\tif err != nil {\n\t\treturn %s\n\t}\n", errReturn)
-		b.WriteString("\treturn respBody, nil\n")
+		okRets = append(okRets, "respBody")
 	case op.HasResult:
 		b.WriteString("\tvar out " + strings.TrimPrefix(op.ResultType, "*") + "\n")
-		fmt.Fprintf(b,
-			"\tif err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s, %s, &out); err != nil {\n",
-			op.Method, op.Path, bodyArg, contentType, accept,
-		)
-		fmt.Fprintf(b, "\t\treturn %s\n\t}\n", errReturn)
-		b.WriteString("\treturn &out, nil\n")
+		if op.HeadersName != "" {
+			fmt.Fprintf(b,
+				"\trespHeader, err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s, %s, &out)\n",
+				op.Method, op.Path, bodyArg, contentType, accept,
+			)
+			fmt.Fprintf(b, "\tif err != nil {\n\t\treturn %s\n\t}\n", errReturn)
+		} else {
+			fmt.Fprintf(b,
+				"\tif _, err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s, %s, &out); err != nil {\n",
+				op.Method, op.Path, bodyArg, contentType, accept,
+			)
+			fmt.Fprintf(b, "\t\treturn %s\n\t}\n", errReturn)
+		}
+		okRets = append(okRets, "&out")
 	default:
-		fmt.Fprintf(b,
-			"\tif err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s, %s, nil); err != nil {\n",
-			op.Method, op.Path, bodyArg, contentType, accept,
-		)
-		fmt.Fprintf(b, "\t\treturn %s\n\t}\n", errReturn)
-		b.WriteString("\treturn nil\n")
+		if op.HeadersName != "" {
+			fmt.Fprintf(b,
+				"\trespHeader, err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s, %s, nil)\n",
+				op.Method, op.Path, bodyArg, contentType, accept,
+			)
+			fmt.Fprintf(b, "\tif err != nil {\n\t\treturn %s\n\t}\n", errReturn)
+		} else {
+			fmt.Fprintf(b,
+				"\tif _, err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s, %s, nil); err != nil {\n",
+				op.Method, op.Path, bodyArg, contentType, accept,
+			)
+			fmt.Fprintf(b, "\t\treturn %s\n\t}\n", errReturn)
+		}
 	}
+
+	// Decode declared response headers into the typed struct.
+	if op.HeadersName != "" {
+		fmt.Fprintf(b, "\toutHeaders := %s{}\n", op.HeadersName)
+		for _, h := range op.RespHeaders {
+			renderHeaderDecode(b, h)
+		}
+		okRets = append(okRets, "outHeaders")
+	}
+
+	okRets = append(okRets, "nil")
+	fmt.Fprintf(b, "\treturn %s\n", strings.Join(okRets, ", "))
 	b.WriteString("}\n\n")
+}
+
+// renderHeaderDecode emits the assignment of one wire header into its
+// typed outHeaders field. Non-string primitives parse best-effort: a
+// missing or malformed value leaves the field at its zero value.
+func renderHeaderDecode(b *strings.Builder, h *respHeaderField) {
+	get := fmt.Sprintf("respHeader.Get(%q)", h.WireName)
+	switch h.Parse {
+	case "cast":
+		fmt.Fprintf(b, "\toutHeaders.%s = %s(%s)\n", h.GoName, h.GoType, get)
+	case "int32":
+		fmt.Fprintf(b, "\tif v, err := strconv.ParseInt(%s, 10, 32); err == nil {\n\t\toutHeaders.%s = int32(v)\n\t}\n", get, h.GoName)
+	case "int64":
+		fmt.Fprintf(b, "\tif v, err := strconv.ParseInt(%s, 10, 64); err == nil {\n\t\toutHeaders.%s = v\n\t}\n", get, h.GoName)
+	case "float32":
+		fmt.Fprintf(b, "\tif v, err := strconv.ParseFloat(%s, 32); err == nil {\n\t\toutHeaders.%s = float32(v)\n\t}\n", get, h.GoName)
+	case "float64":
+		fmt.Fprintf(b, "\tif v, err := strconv.ParseFloat(%s, 64); err == nil {\n\t\toutHeaders.%s = v\n\t}\n", get, h.GoName)
+	case "bool":
+		fmt.Fprintf(b, "\tif v, err := strconv.ParseBool(%s); err == nil {\n\t\toutHeaders.%s = v\n\t}\n", get, h.GoName)
+	default:
+		fmt.Fprintf(b, "\toutHeaders.%s = %s\n", h.GoName, get)
+	}
 }
 
 func renderDoc(b *strings.Builder, doc string) {

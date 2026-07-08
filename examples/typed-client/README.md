@@ -36,7 +36,7 @@ Expected output:
 [1] healthz: status="ok"
 [2] listItems: 1 item(s), first="Widget"
 [3] createItem: id=2 name="Sprocket"
-[4] getItem(2): name="Widget" created_at="2026-01-01T00:00:00Z"
+[4] getItem(2): name="Widget" etag="item-2-v1" cache-control="max-age=60"
 [5] deleteItem(2): 204 No Content
 [6] exportItems: 17 bytes of csv, header "id,name"
 [7] importItems: 204 No Content
@@ -104,8 +104,13 @@ func (c *Client) ListItems(ctx context.Context, cursor *string, limit *int64) (*
 // Required header + body. Removing an arg fails to compile.
 func (c *Client) CreateItem(ctx context.Context, idempotencyKey string, body CreateItemBody) (*Item, error)
 
-// int64 path param.
-func (c *Client) GetItem(ctx context.Context, id int64) (*Item, error)
+// int64 path param. The 200 declares ETag and Cache-Control headers,
+// so a typed headers struct rides alongside the body.
+type GetItemResponseHeaders struct {
+    CacheControl string
+    Etag         string
+}
+func (c *Client) GetItem(ctx context.Context, id int64) (*Item, GetItemResponseHeaders, error)
 
 // Multiple required headers — alphabetical order by Go name.
 func (c *Client) DeleteItem(ctx context.Context, id int64, idempotencyKey string, ifMatch string) error

@@ -250,6 +250,147 @@ components:
 		})
 	})
 
+	Describe("response headers", func() {
+		It("declared headers become a typed struct returned alongside the body", func() {
+			_, client := generateAll([]byte(`
+openapi: 3.1.0
+info: {title: t, version: 0.0.1}
+paths:
+  /items/{id}:
+    get:
+      operationId: getItem
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: ok
+          headers:
+            ETag:
+              description: Entity tag for the returned item
+              schema: {type: string}
+            Cache-Control: {schema: {type: string}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}
+components:
+  schemas:
+    Item:
+      type: object
+      required: [id]
+      properties: {id: {type: string}}
+`))
+			// Struct fields are alphabetical by Go name, derived like params.
+			Expect(client).To(ContainSubstring("type GetItemResponseHeaders struct {"))
+			Expect(client).To(MatchRegexp(`CacheControl\s+string`))
+			Expect(client).To(MatchRegexp(`Etag\s+string`))
+			// The method returns the struct as an additional value.
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) GetItem(ctx context.Context, id string) (*Item, GetItemResponseHeaders, error)"))
+			// Wire names keep their original case.
+			Expect(client).To(ContainSubstring(`outHeaders.Etag = respHeader.Get("ETag")`))
+			Expect(client).To(ContainSubstring(`outHeaders.CacheControl = respHeader.Get("Cache-Control")`))
+		})
+
+		It("non-string header schemas parse through the param type mapping", func() {
+			_, client := generateAll([]byte(`
+openapi: 3.1.0
+info: {title: t, version: 0.0.1}
+paths:
+  /items:
+    get:
+      operationId: listItems
+      responses:
+        '200':
+          description: ok
+          headers:
+            X-Total-Count: {schema: {type: integer, format: int64}}
+          content: {application/json: {schema: {type: array, items: {type: string}}}}
+`))
+			Expect(client).To(MatchRegexp(`XTotalCount\s+int64`))
+			Expect(client).To(ContainSubstring(
+				`if v, err := strconv.ParseInt(respHeader.Get("X-Total-Count"), 10, 64); err == nil {`))
+		})
+
+		It("headers on a body-less success response still change the signature", func() {
+			_, client := generateAll([]byte(`
+openapi: 3.1.0
+info: {title: t, version: 0.0.1}
+paths:
+  /x:
+    delete:
+      operationId: deleteX
+      responses:
+        '204':
+          description: no content
+          headers:
+            X-Request-Id: {schema: {type: string}}
+`))
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) DeleteX(ctx context.Context) (DeleteXResponseHeaders, error)"))
+		})
+
+		It("headers on a streamed response ride alongside the io.ReadCloser", func() {
+			_, client := generateAll([]byte(`
+openapi: 3.1.0
+info: {title: t, version: 0.0.1}
+paths:
+  /x/export:
+    get:
+      operationId: exportX
+      responses:
+        '200':
+          description: csv stream
+          headers:
+            ETag: {schema: {type: string}}
+          content:
+            text/csv: {}
+`))
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) ExportX(ctx context.Context) (io.ReadCloser, ExportXResponseHeaders, error)"))
+		})
+
+		It("ignores a declared Content-Type header, per OpenAPI 3", func() {
+			_, client := generateAll([]byte(`
+openapi: 3.1.0
+info: {title: t, version: 0.0.1}
+paths:
+  /x:
+    get:
+      operationId: getX
+      responses:
+        '200':
+          description: ok
+          headers:
+            Content-Type: {schema: {type: string}}
+          content: {application/json: {schema: {type: object, properties: {a: {type: string}}}}}
+`))
+			// Content-Type was the only declared header, so the signature
+			// keeps its unadorned shape.
+			Expect(client).ToNot(ContainSubstring("GetXResponseHeaders"))
+		})
+
+		It("operations without declared headers keep their signatures", func() {
+			_, client := generateAll([]byte(`
+openapi: 3.1.0
+info: {title: t, version: 0.0.1}
+paths:
+  /x:
+    get:
+      operationId: getX
+      responses:
+        '200':
+          description: ok
+          content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}
+components:
+  schemas:
+    Item:
+      type: object
+      required: [id]
+      properties: {id: {type: string}}
+`))
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) GetX(ctx context.Context) (*Item, error)"))
+		})
+	})
+
 	Describe("request body", func() {
 		It("required JSON body becomes a typed Body field (value)", func() {
 			_, client := generateAll([]byte(`
