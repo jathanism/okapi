@@ -2,6 +2,7 @@ package typed_test
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,10 +22,29 @@ import (
 // - GET with no body and 204 (no result)
 // - POST with body, headers, path params, and a typed response
 // - GET that returns 404 with a JSON error body (to test APIError)
+// - POST with an application/octet-stream body (streamed upload)
+// - GET with a text/csv response (streamed download)
 const transportSpec = `
 openapi: 3.1.0
 info: {title: t, version: 0.0.1}
 paths:
+  /thing/import:
+    post:
+      operationId: importThings
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: {}
+      responses:
+        '204': {description: accepted}
+  /thing/export:
+    get:
+      operationId: exportThings
+      responses:
+        '200':
+          description: csv stream
+          content:
+            text/csv: {}
   /thing/{id}:
     parameters:
       - {name: id, in: path, required: true, schema: {type: string}}
@@ -248,6 +268,85 @@ func main() {
 }
 `)
 		Expect(strings.TrimSpace(out)).To(Equal("OK"))
+	})
+
+	It("streams an application/octet-stream body without buffering it", func() {
+		var (
+			gotContentType   string
+			gotContentLength int64
+			gotBody          string
+		)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotContentType = r.Header.Get("Content-Type")
+			gotContentLength = r.ContentLength
+			raw, _ := io.ReadAll(r.Body)
+			gotBody = string(raw)
+			w.WriteHeader(204)
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+)
+
+// opaque hides the concrete reader type so net/http cannot sniff a
+// length from it — a buffered upload would have a Content-Length.
+type opaque struct{ r io.Reader }
+
+func (o opaque) Read(p []byte) (int, error) { return o.r.Read(p) }
+
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	// ImportThings(ctx, body io.Reader)
+	if err := c.ImportThings(context.Background(), opaque{strings.NewReader("raw,bytes\n1,2\n")}); err != nil {
+		fmt.Println("ERR", err); os.Exit(1)
+	}
+	fmt.Println("OK")
+}
+`)
+		Expect(strings.TrimSpace(out)).To(Equal("OK"))
+		Expect(gotContentType).To(Equal("application/octet-stream"))
+		Expect(gotBody).To(Equal("raw,bytes\n1,2\n"))
+		// -1 means chunked transfer — the reader was streamed, not
+		// buffered into memory first.
+		Expect(gotContentLength).To(Equal(int64(-1)))
+	})
+
+	It("returns a non-JSON response body as an io.ReadCloser and sets Accept", func() {
+		var gotAccept string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotAccept = r.Header.Get("Accept")
+			w.Header().Set("Content-Type", "text/csv")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte("id,name\n1,alice\n"))
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	// ExportThings(ctx) (io.ReadCloser, error) — caller closes.
+	body, err := c.ExportThings(context.Background())
+	if err != nil { fmt.Println("ERR", err); os.Exit(1) }
+	defer body.Close()
+	raw, err := io.ReadAll(body)
+	if err != nil { fmt.Println("ERR", err); os.Exit(1) }
+	fmt.Print(string(raw))
+}
+`)
+		Expect(out).To(Equal("id,name\n1,alice\n"))
+		Expect(gotAccept).To(Equal("text/csv"))
 	})
 
 	It("merges DefaultHeaders, with per-call headers overriding by Set semantics", func() {

@@ -16,7 +16,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"strings"
 
 	"github.com/jathanism/okapi/examples/typed-client/client"
 )
@@ -63,20 +65,36 @@ func main() {
 	}
 	fmt.Printf("[5] deleteItem(%d): 204 No Content\n", created.Id)
 
-	// 6) Negative — server returns 422 when name is empty. Demonstrates
+	// 6) ExportItems(ctx) — a text/csv response is streamed back as an
+	// io.ReadCloser instead of being decoded; the caller must close it.
+	csvBody, err := c.ExportItems(ctx)
+	must("exportItems", err)
+	csvData, err := io.ReadAll(csvBody)
+	_ = csvBody.Close()
+	must("exportItems read", err)
+	fmt.Printf("[6] exportItems: %d bytes of csv, header %q\n",
+		len(csvData), strings.SplitN(string(csvData), "\n", 2)[0])
+
+	// 7) ImportItems(ctx, body) — an application/octet-stream request
+	// body is streamed from any io.Reader, not buffered.
+	err = c.ImportItems(ctx, strings.NewReader("name\nGadget\n"))
+	must("importItems", err)
+	fmt.Println("[7] importItems: 204 No Content")
+
+	// 8) Negative — server returns 422 when name is empty. Demonstrates
 	// the typed *APIError surface for non-2xx responses.
 	_, err = c.CreateItem(ctx, "key-3", client.CreateItemBody{Name: ""})
 	var apiErr *client.APIError
 	switch {
 	case errors.As(err, &apiErr):
-		fmt.Printf("[6] empty name → APIError(%d) %s\n", apiErr.StatusCode, string(apiErr.Body))
+		fmt.Printf("[8] empty name → APIError(%d) %s\n", apiErr.StatusCode, string(apiErr.Body))
 	case err == nil:
-		log.Fatalf("[6] expected an error, got nil")
+		log.Fatalf("[8] expected an error, got nil")
 	default:
-		log.Fatalf("[6] unexpected error type: %v", err)
+		log.Fatalf("[8] unexpected error type: %v", err)
 	}
 
-	fmt.Println("\nAll six interactions succeeded.")
+	fmt.Println("\nAll eight interactions succeeded.")
 }
 
 func must(op string, err error) {

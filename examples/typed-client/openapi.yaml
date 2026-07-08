@@ -68,6 +68,31 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
 
+  /items/export:
+    get:
+      operationId: exportItems
+      summary: Export items as CSV
+      responses:
+        "200":
+          description: CSV stream
+          content:
+            text/csv: {}
+
+  /items/import:
+    post:
+      operationId: importItems
+      summary: Bulk-import items from a CSV upload
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "204":
+          description: No Content
+
   /items/{id}:
     get:
       operationId: getItem

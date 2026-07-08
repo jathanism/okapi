@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -44,6 +45,25 @@ func newFakeServer() *httptest.Server {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	})
+
+	mux.HandleFunc("/items/export", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/csv")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("id,name\n1,Widget\n"))
+	})
+
+	mux.HandleFunc("/items/import", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		raw, err := io.ReadAll(r.Body)
+		if err != nil || len(raw) == 0 {
+			writeProblem(w, http.StatusBadRequest, "request body is required")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	mux.HandleFunc("/items/", func(w http.ResponseWriter, r *http.Request) {

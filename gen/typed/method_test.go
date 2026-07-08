@@ -121,7 +121,7 @@ paths:
 `))
 			Expect(client).To(ContainSubstring("func (c *Client) GetOk("))
 			// No method should be generated for the unnamed op.
-			Expect(strings.Count(client, "func (c *Client) ")).To(Equal(3)) // do, httpClient, GetOk
+			Expect(strings.Count(client, "func (c *Client) ")).To(Equal(5)) // send, do, doStream, httpClient, GetOk
 		})
 	})
 
@@ -182,6 +182,72 @@ paths:
 `))
 			Expect(client).To(ContainSubstring("func (c *Client) GetX(ctx context.Context) error"))
 		})
+
+		It("streams a non-JSON 2xx response as io.ReadCloser", func() {
+			_, client := generateAll([]byte(`
+openapi: 3.1.0
+info: {title: t, version: 0.0.1}
+paths:
+  /x/export:
+    get:
+      operationId: exportX
+      responses:
+        '200':
+          description: csv stream
+          content:
+            text/csv: {}
+`))
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) ExportX(ctx context.Context) (io.ReadCloser, error)"))
+			// Streamed via doStream, with the declared media type as Accept.
+			Expect(client).To(ContainSubstring(
+				`c.doStream(ctx, "GET", "/x/export", pathParams, query, headers, nil, "", "text/csv")`))
+			// The caller-must-close contract is documented on the method.
+			Expect(client).To(ContainSubstring("the caller must close it."))
+		})
+
+		It("streams application/octet-stream 2xx responses with a binary schema", func() {
+			_, client := generateAll([]byte(`
+openapi: 3.1.0
+info: {title: t, version: 0.0.1}
+paths:
+  /x/blob:
+    get:
+      operationId: getBlob
+      responses:
+        '200':
+          description: raw bytes
+          content:
+            application/octet-stream: {schema: {type: string, format: binary}}
+`))
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) GetBlob(ctx context.Context) (io.ReadCloser, error)"))
+		})
+
+		It("prefers application/json over non-JSON when a 2xx declares both", func() {
+			_, client := generateAll([]byte(`
+openapi: 3.1.0
+info: {title: t, version: 0.0.1}
+paths:
+  /x:
+    get:
+      operationId: getX
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/Result'}}
+            text/csv: {}
+components:
+  schemas:
+    Result:
+      type: object
+      required: [id]
+      properties: {id: {type: integer, format: int64}}
+`))
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) GetX(ctx context.Context) (*Result, error)"))
+		})
 	})
 
 	Describe("request body", func() {
@@ -229,7 +295,7 @@ components:
 				"func (c *Client) CreateX(ctx context.Context, body *Req)"))
 		})
 
-		It("non-JSON body content is ignored", func() {
+		It("non-JSON, non-binary body content is ignored", func() {
 			_, client := generateAll([]byte(`
 openapi: 3.1.0
 info: {title: t, version: 0.0.1}
@@ -245,6 +311,75 @@ paths:
 `))
 			// No Body field — only ctx in the signature.
 			Expect(client).To(ContainSubstring("func (c *Client) CreateX(ctx context.Context) error"))
+		})
+
+		It("application/octet-stream body becomes a streamed io.Reader", func() {
+			_, client := generateAll([]byte(`
+openapi: 3.1.0
+info: {title: t, version: 0.0.1}
+paths:
+  /x:
+    post:
+      operationId: uploadX
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: {}
+      responses: {'204': {description: ok}}
+`))
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) UploadX(ctx context.Context, body io.Reader) error"))
+			// The reader is handed to the transport untouched, with the
+			// declared media type as Content-Type.
+			Expect(client).To(ContainSubstring(
+				`headers, body, "application/octet-stream", "application/json", nil)`))
+			// The streaming contract is documented on the method.
+			Expect(client).To(ContainSubstring(
+				"// The request body is streamed as application/octet-stream; it is not buffered."))
+		})
+
+		It("a binary-schema body (type string, format binary) becomes a streamed io.Reader", func() {
+			_, client := generateAll([]byte(`
+openapi: 3.1.0
+info: {title: t, version: 0.0.1}
+paths:
+  /x:
+    post:
+      operationId: uploadX
+      requestBody:
+        required: true
+        content:
+          text/csv: {schema: {type: string, format: binary}}
+      responses: {'204': {description: ok}}
+`))
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) UploadX(ctx context.Context, body io.Reader) error"))
+			Expect(client).To(ContainSubstring(`body, "text/csv",`))
+		})
+
+		It("prefers application/json when both JSON and binary bodies are declared", func() {
+			_, client := generateAll([]byte(`
+openapi: 3.1.0
+info: {title: t, version: 0.0.1}
+paths:
+  /x:
+    post:
+      operationId: createX
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/Req'}}
+          application/octet-stream: {}
+      responses: {'201': {description: ok}}
+components:
+  schemas:
+    Req:
+      type: object
+      required: [name]
+      properties: {name: {type: string}}
+`))
+			Expect(client).To(ContainSubstring(
+				"func (c *Client) CreateX(ctx context.Context, body Req) error"))
 		})
 	})
 
