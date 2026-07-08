@@ -63,6 +63,38 @@ var _ = Describe("goEnumIdent", func() {
 	})
 })
 
+var _ = Describe("goEnumIdents", func() {
+	It("leaves non-colliding values untouched", func() {
+		Expect(goEnumIdents("Status", []string{"open", "closed"})).
+			To(Equal([]string{"StatusOpen", "StatusClosed"}))
+	})
+
+	It("suffixes a later value whose mangling collides", func() {
+		Expect(goEnumIdents("SortBy", []string{"signed_up_at", "signedUpAt"})).
+			To(Equal([]string{"SortBySignedUpAt", "SortBySignedUpAt2"}))
+	})
+
+	It("numbers a triple collision 2 then 3", func() {
+		Expect(goEnumIdents("SortBy", []string{"full_name", "fullName", "FullName"})).
+			To(Equal([]string{"SortByFullName", "SortByFullName2", "SortByFullName3"}))
+	})
+
+	It("skips a suffix another value would claim naturally", func() {
+		// "signed_up_at_2" naturally mangles to SortBySignedUpAt2, so the
+		// collider must jump to 3 instead of stealing it.
+		Expect(goEnumIdents("SortBy", []string{"signed_up_at", "signedUpAt", "signed_up_at_2"})).
+			To(Equal([]string{"SortBySignedUpAt", "SortBySignedUpAt3", "SortBySignedUpAt2"}))
+	})
+
+	It("is deterministic across runs", func() {
+		values := []string{"signed_up_at", "signedUpAt", "full_name", "fullName"}
+		first := goEnumIdents("SortBy", values)
+		for i := 0; i < 10; i++ {
+			Expect(goEnumIdents("SortBy", values)).To(Equal(first))
+		}
+	})
+})
+
 var _ = Describe("splitWords", func() {
 	cases := []struct {
 		in  string
