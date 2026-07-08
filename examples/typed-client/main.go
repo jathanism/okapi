@@ -84,17 +84,19 @@ func main() {
 	must("importItems", err)
 	fmt.Println("[7] importItems: 204 No Content")
 
-	// 8) Negative — server returns 422 when name is empty. Demonstrates
-	// the typed *APIError surface for non-2xx responses.
+	// 8) Negative — server returns a 422 application/problem+json body
+	// when name is empty. The RFC 7807 members are decoded onto
+	// apiErr.Problem; apiErr.Body keeps the raw bytes either way.
 	_, err = c.CreateItem(ctx, "key-3", client.CreateItemBody{Name: ""})
 	var apiErr *client.APIError
 	switch {
-	case errors.As(err, &apiErr):
-		fmt.Printf("[8] empty name → APIError(%d) %s\n", apiErr.StatusCode, string(apiErr.Body))
+	case errors.As(err, &apiErr) && apiErr.Problem != nil:
+		fmt.Printf("[8] empty name → APIError(%d) title=%q detail=%q\n",
+			apiErr.StatusCode, apiErr.Problem.Title, apiErr.Problem.Detail)
 	case err == nil:
 		log.Fatalf("[8] expected an error, got nil")
 	default:
-		log.Fatalf("[8] unexpected error type: %v", err)
+		log.Fatalf("[8] unexpected error shape: %v", err)
 	}
 
 	fmt.Println("\nAll eight interactions succeeded.")

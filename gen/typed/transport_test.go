@@ -260,6 +260,129 @@ func main() {
 		Expect(strings.TrimSpace(out)).To(Equal(`APIError(404) {"title":"not found"}`))
 	})
 
+	It("decodes an application/problem+json error body into APIError.Problem", func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			// Media type parameters must be tolerated.
+			w.Header().Set("Content-Type", "application/problem+json; charset=utf-8")
+			w.WriteHeader(422)
+			_, _ = w.Write([]byte(`{
+				"type": "https://example.com/errors/validation",
+				"title": "Unprocessable Entity",
+				"status": 422,
+				"detail": "name is required",
+				"instance": "/thing/missing",
+				"errors": [{"location": "body.name", "message": "required"}]
+			}`))
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	_, err := c.GetMissing(context.Background())
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Problem == nil {
+		fmt.Println("UNEXPECTED", err); os.Exit(1)
+	}
+	p := ae.Problem
+	fmt.Printf("%s | %s | %d | %s | %s | %s\n",
+		p.Type, p.Title, p.Status, p.Detail, p.Instance, string(p.Extensions["errors"]))
+}
+`)
+		Expect(strings.TrimSpace(out)).To(Equal(
+			`https://example.com/errors/validation | Unprocessable Entity | 422 | name is required | /thing/missing | [{"location": "body.name", "message": "required"}]`))
+	})
+
+	It("keeps the raw Body and a nil Problem when the problem body is malformed", func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(500)
+			_, _ = w.Write([]byte(`<oops, not json>`))
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	_, err := c.GetMissing(context.Background())
+	var ae *APIError
+	if !errors.As(err, &ae) {
+		fmt.Println("UNEXPECTED", err); os.Exit(1)
+	}
+	fmt.Printf("%d problem=%v body=%s\n", ae.StatusCode, ae.Problem, string(ae.Body))
+}
+`)
+		Expect(strings.TrimSpace(out)).To(Equal(`500 problem=<nil> body=<oops, not json>`))
+	})
+
+	It("decodes plain application/json error objects the same way", func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(409)
+			_, _ = w.Write([]byte(`{"title":"Conflict","code":"already_exists"}`))
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	_, err := c.GetMissing(context.Background())
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Problem == nil {
+		fmt.Println("UNEXPECTED", err); os.Exit(1)
+	}
+	fmt.Printf("%s | %s\n", ae.Problem.Title, string(ae.Problem.Extensions["code"]))
+}
+`)
+		Expect(strings.TrimSpace(out)).To(Equal(`Conflict | "already_exists"`))
+	})
+
+	It("leaves Problem nil for non-JSON error content types", func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(502)
+			_, _ = w.Write([]byte(`<html>bad gateway</html>`))
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	_, err := c.GetMissing(context.Background())
+	var ae *APIError
+	if !errors.As(err, &ae) {
+		fmt.Println("UNEXPECTED", err); os.Exit(1)
+	}
+	fmt.Printf("%d problem=%v\n", ae.StatusCode, ae.Problem)
+}
+`)
+		Expect(strings.TrimSpace(out)).To(Equal(`502 problem=<nil>`))
+	})
+
 	It("returns nil on a 204 with no result type", func() {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(204)

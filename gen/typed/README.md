@@ -91,7 +91,7 @@ substituted with `url.PathEscape`.
   streamed from an `io.Reader` (see below)
 - Responses: first 2xx with `application/json`; non-JSON 2xx content is
   streamed as an `io.ReadCloser`; non-2xx returns a typed `*APIError`
-  carrying status code and raw body
+  carrying status code, raw body, and decoded RFC 7807 problem details
 - Response headers declared on the success response → a typed
   `<Op>ResponseHeaders` struct returned alongside the body
 
@@ -153,6 +153,35 @@ non-string primitives (e.g. `type: integer`) parse best-effort, and a
 missing or malformed value leaves the field at its zero value. Only
 operations that declare response headers change shape — everything
 else keeps the plain `(*T, error)` / `error` signatures.
+
+### RFC 7807 problem details
+
+Non-2xx responses whose `Content-Type` is `application/problem+json`
+(media type parameters tolerated) or `application/json` are decoded
+into `APIError.Problem`:
+
+```go
+type APIProblem struct {
+    Type     string
+    Title    string
+    Status   int
+    Detail   string
+    Instance string
+    // Non-standard members (e.g. a per-field "errors" array), raw.
+    Extensions map[string]json.RawMessage
+}
+```
+
+Decoding is best-effort: a malformed problem body never masks the HTTP
+error — `Problem` stays nil and `APIError.Body` always carries the raw
+bytes.
+
+```go
+var apiErr *client.APIError
+if errors.As(err, &apiErr) && apiErr.Problem != nil {
+    log.Printf("%d %s: %s", apiErr.StatusCode, apiErr.Problem.Title, apiErr.Problem.Detail)
+}
+```
 
 ## What's not supported (yet)
 
