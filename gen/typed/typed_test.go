@@ -94,6 +94,31 @@ components:
         nickname: {type: string}
 `
 
+// collidingEnumSpec lists canonical snake_case enum values next to
+// legacy camelCase (and SCREAMING_SNAKE) aliases that mangle to the
+// same Go identifier.
+const collidingEnumSpec = `
+openapi: 3.1.0
+info: {title: Test, version: 0.0.1}
+paths:
+  /contacts/search:
+    get:
+      operationId: searchContacts
+      parameters:
+        - name: sort_by
+          in: query
+          schema:
+            type: string
+            enum: [id, created_at, signed_up_at, full_name,
+                   signedUpAt, fullName, FULL_NAME]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {type: string}
+`
+
 var _ = Describe("Generate", func() {
 	It("rejects empty PackageName", func() {
 		_, err := typed.Generate(typed.Options{SpecBytes: []byte(minSpec)})
@@ -185,6 +210,52 @@ var _ = Describe("Generate", func() {
 			0o644,
 		)).To(Succeed())
 
+		cmd := exec.Command("go", "build", "./...")
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		Expect(err).ToNot(HaveOccurred(), "go build failed:\n%s", out)
+	})
+
+	It("disambiguates enum values whose identifiers collide", func() {
+		// A spec that lists canonical snake_case enum values alongside
+		// legacy camelCase aliases: both mangle to the same Go identifier,
+		// which used to emit redeclared consts that failed go build.
+		files, err := typed.Generate(typed.Options{
+			PackageName: "demo",
+			SpecBytes:   []byte(collidingEnumSpec),
+		})
+		Expect(err).ToNot(HaveOccurred())
+		types := string(files["types.gen.go"])
+
+		// First occurrence keeps the clean name; the alias gets an ordinal
+		// suffix. Wire values stay exact on both.
+		Expect(types).To(MatchRegexp(`SearchContactsSortBySignedUpAt\s+SearchContactsSortBy = "signed_up_at"`))
+		Expect(types).To(MatchRegexp(`SearchContactsSortBySignedUpAt2\s+SearchContactsSortBy = "signedUpAt"`))
+		// A triple collision numbers 2 then 3.
+		Expect(types).To(MatchRegexp(`SearchContactsSortByFullName\s+SearchContactsSortBy = "full_name"`))
+		Expect(types).To(MatchRegexp(`SearchContactsSortByFullName2\s+SearchContactsSortBy = "fullName"`))
+		Expect(types).To(MatchRegexp(`SearchContactsSortByFullName3\s+SearchContactsSortBy = "FULL_NAME"`))
+
+		// Naming is deterministic across runs.
+		again, err := typed.Generate(typed.Options{
+			PackageName: "demo",
+			SpecBytes:   []byte(collidingEnumSpec),
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(string(again["types.gen.go"])).To(Equal(types))
+
+		// And the generated package compiles.
+		dir, err := os.MkdirTemp("", "typedgen-enum-")
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(os.RemoveAll, dir)
+		for name, data := range files {
+			Expect(os.WriteFile(filepath.Join(dir, name), data, 0o644)).To(Succeed())
+		}
+		Expect(os.WriteFile(
+			filepath.Join(dir, "go.mod"),
+			[]byte("module demo\n\ngo 1.21\n"),
+			0o644,
+		)).To(Succeed())
 		cmd := exec.Command("go", "build", "./...")
 		cmd.Dir = dir
 		out, err := cmd.CombinedOutput()

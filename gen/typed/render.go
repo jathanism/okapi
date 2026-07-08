@@ -63,9 +63,9 @@ func (g *generator) renderTypes() (string, error) {
 			renderDoc(&b, t.Doc)
 			fmt.Fprintf(&b, "type %s string\n\n", name)
 			b.WriteString("const (\n")
-			for _, v := range t.EnumValues {
-				ident := goEnumIdent(name, v)
-				fmt.Fprintf(&b, "\t%s %s = %q\n", ident, name, v)
+			idents := goEnumIdents(name, t.EnumValues)
+			for i, v := range t.EnumValues {
+				fmt.Fprintf(&b, "\t%s %s = %q\n", idents[i], name, v)
 			}
 			b.WriteString(")\n\n")
 		case kindAlias, kindArray, kindMap, kindPrimitive:

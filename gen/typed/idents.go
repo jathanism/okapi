@@ -1,6 +1,7 @@
 package typed
 
 import (
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -102,6 +103,38 @@ func isGoIdent(s string) bool {
 // prefix it with the enum's type name so the consts don't collide.
 func goEnumIdent(typeName, value string) string {
 	return typeName + pascal(value)
+}
+
+// goEnumIdents renders every enum value into a Go identifier,
+// disambiguating collisions. Distinct wire values like "signed_up_at"
+// and "signedUpAt" both mangle to "SignedUpAt"; emitting both would
+// redeclare the const. The first value (in spec order) keeps the clean
+// name; each later collider gets an ordinal suffix ("2", then "3", ...)
+// bumped until it clears both the already-emitted names and every other
+// value's natural mangling, so the result is deterministic and never
+// steals a name a sibling value would claim.
+func goEnumIdents(typeName string, values []string) []string {
+	natural := make(map[string]bool, len(values))
+	for _, v := range values {
+		natural[goEnumIdent(typeName, v)] = true
+	}
+	emitted := make(map[string]bool, len(values))
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		ident := goEnumIdent(typeName, v)
+		if emitted[ident] {
+			base := ident
+			for n := 2; ; n++ {
+				ident = base + strconv.Itoa(n)
+				if !emitted[ident] && !natural[ident] {
+					break
+				}
+			}
+		}
+		emitted[ident] = true
+		out = append(out, ident)
+	}
+	return out
 }
 
 // goKeywords are reserved Go identifiers that cannot be used as
