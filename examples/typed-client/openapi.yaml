@@ -107,6 +107,14 @@ paths:
       responses:
         "200":
           description: OK
+          headers:
+            ETag:
+              description: Entity tag for the returned item
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
           content:
             application/json:
               schema:

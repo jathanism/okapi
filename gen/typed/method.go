@@ -43,6 +43,11 @@ type operation struct {
 	ResultPtr    bool   // emit as pointer in return signature
 	ResultStream bool   // true if the 2xx body is non-JSON — returned as io.ReadCloser
 	ResultMedia  string // declared media type of the streamed response
+
+	// Response headers declared on the primary success response. When
+	// non-empty, the method returns an extra HeadersName struct value.
+	RespHeaders []*respHeaderField
+	HeadersName string // "<GoName>ResponseHeaders"
 }
 
 type paramField struct {
@@ -51,6 +56,16 @@ type paramField struct {
 	GoType   string // Go type expression
 	In       string // "path", "query", or "header"
 	Required bool
+	Doc      string
+}
+
+// respHeaderField is one declared response header, surfaced as a field
+// on the generated <Op>ResponseHeaders struct.
+type respHeaderField struct {
+	GoName   string // PascalCase
+	WireName string // header name on the wire
+	GoType   string // Go type expression for the struct field
+	Parse    string // decode strategy: "string", "cast", "int32", "int64", "float32", "float64", or "bool"
 	Doc      string
 }
 
@@ -197,11 +212,11 @@ func (g *generator) translateOperation(method, path string, op *v3.Operation, pa
 			out.ResultType = bestSchema
 			out.ResultPtr = true // we always return *T for shaped JSON responses
 		}
+		var streamCode string
 		if !out.HasResult {
 			// No decodable JSON response: the lowest 2xx declaring any
 			// non-JSON media type (e.g. text/csv, application/octet-stream,
 			// with or without a schema) streams its raw body to the caller.
-			var streamCode string
 			for rPair := op.Responses.Codes.First(); rPair != nil; rPair = rPair.Next() {
 				code := rPair.Key()
 				if !isSuccess(code) {
@@ -227,9 +242,92 @@ func (g *generator) translateOperation(method, path string, op *v3.Operation, pa
 				out.ResultStream = true
 			}
 		}
+
+		// Response headers: `headers:` declared on the primary success
+		// response — the one the body comes from, or the lowest 2xx for
+		// body-less operations — become a typed <Op>ResponseHeaders
+		// struct returned alongside the body.
+		headerCode := bestCode
+		if !out.HasResult {
+			headerCode = streamCode
+		}
+		if headerCode == "" {
+			for rPair := op.Responses.Codes.First(); rPair != nil; rPair = rPair.Next() {
+				code := rPair.Key()
+				if !isSuccess(code) {
+					continue
+				}
+				if headerCode == "" || code < headerCode {
+					headerCode = code
+				}
+			}
+		}
+		if headerCode != "" {
+			if err := g.collectResponseHeaders(out, op.Responses.Codes.GetOrZero(headerCode)); err != nil {
+				return nil, fmt.Errorf("response %s: %w", headerCode, err)
+			}
+		}
 	}
 
 	return out, nil
+}
+
+// collectResponseHeaders translates a success response's declared
+// headers into respHeaderFields on op, sorted alphabetically by Go name
+// (deterministic and independent of spec order, like header params).
+func (g *generator) collectResponseHeaders(op *operation, r *v3.Response) error {
+	if r == nil || r.Headers == nil {
+		return nil
+	}
+	for hPair := r.Headers.First(); hPair != nil; hPair = hPair.Next() {
+		name := hPair.Key()
+		// Per OpenAPI 3, a "Content-Type" entry in a response headers
+		// map is ignored.
+		if strings.EqualFold(name, "Content-Type") {
+			continue
+		}
+		h := hPair.Value()
+		if h == nil {
+			continue
+		}
+		schema, err := g.translateSchema(h.Schema, op.GoName+pascal(name))
+		if err != nil {
+			return fmt.Errorf("header %s: %w", name, err)
+		}
+		goType, parse := headerFieldType(schema)
+		op.RespHeaders = append(op.RespHeaders, &respHeaderField{
+			GoName:   pascal(name),
+			WireName: name,
+			GoType:   goType,
+			Parse:    parse,
+			Doc:      cleanDoc(h.Description),
+		})
+	}
+	if len(op.RespHeaders) == 0 {
+		return nil
+	}
+	sort.Slice(op.RespHeaders, func(i, j int) bool {
+		return op.RespHeaders[i].GoName < op.RespHeaders[j].GoName
+	})
+	op.HeadersName = op.GoName + "ResponseHeaders"
+	return nil
+}
+
+// headerFieldType maps a header's schema type onto a struct field type
+// and a decode strategy. Headers are strings on the wire, so anything
+// beyond the primitives (and named string enums) falls back to the raw
+// header string.
+func headerFieldType(t *goType) (goExpr, parse string) {
+	switch t.Kind {
+	case kindEnum:
+		return t.goExpr, "cast"
+	case kindPrimitive:
+		switch t.goExpr {
+		case "int32", "int64", "float32", "float64", "bool":
+			return t.goExpr, t.goExpr
+		}
+	}
+	return "string", "string"
 }
 
 // binaryRequestMedia returns the first request-body media type that

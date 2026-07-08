@@ -24,6 +24,7 @@ import (
 // - GET that returns 404 with a JSON error body (to test APIError)
 // - POST with an application/octet-stream body (streamed upload)
 // - GET with a text/csv response (streamed download)
+// - GET with declared response headers (typed headers struct)
 const transportSpec = `
 openapi: 3.1.0
 info: {title: t, version: 0.0.1}
@@ -68,6 +69,18 @@ paths:
       responses:
         '201':
           description: created
+          content: {application/json: {schema: {$ref: '#/components/schemas/Thing'}}}
+  /thing/{id}/versioned:
+    get:
+      operationId: getVersionedThing
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: ok
+          headers:
+            ETag: {schema: {type: string}}
+            X-Total-Count: {schema: {type: integer, format: int64}}
           content: {application/json: {schema: {$ref: '#/components/schemas/Thing'}}}
   /thing/{id}/wipe:
     parameters:
@@ -347,6 +360,59 @@ func main() {
 `)
 		Expect(out).To(Equal("id,name\n1,alice\n"))
 		Expect(gotAccept).To(Equal("text/csv"))
+	})
+
+	It("decodes declared response headers into the typed headers struct", func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("ETag", `"v42"`)
+			w.Header().Set("X-Total-Count", "17")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"id":"x","name":"y"}`))
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"fmt"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	// GetVersionedThing(ctx, id) (*Thing, GetVersionedThingResponseHeaders, error)
+	thing, h, err := c.GetVersionedThing(context.Background(), "x")
+	if err != nil { fmt.Println("ERR", err); os.Exit(1) }
+	fmt.Printf("%s etag=%s total=%d\n", thing.Name, h.Etag, h.XTotalCount)
+}
+`)
+		Expect(strings.TrimSpace(out)).To(Equal(`y etag="v42" total=17`))
+	})
+
+	It("leaves undeclared or malformed response header values at their zero value", func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			// No ETag; X-Total-Count is not an integer.
+			w.Header().Set("X-Total-Count", "many")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"id":"x","name":"y"}`))
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"fmt"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	_, h, err := c.GetVersionedThing(context.Background(), "x")
+	if err != nil { fmt.Println("ERR", err); os.Exit(1) }
+	fmt.Printf("etag=%q total=%d\n", h.Etag, h.XTotalCount)
+}
+`)
+		Expect(strings.TrimSpace(out)).To(Equal(`etag="" total=0`))
 	})
 
 	It("merges DefaultHeaders, with per-call headers overriding by Set semantics", func() {

@@ -53,10 +53,13 @@ func main() {
 	must("createItem", err)
 	fmt.Printf("[3] createItem: id=%d name=%q\n", created.Id, created.Name)
 
-	// 4) GetItem(ctx, id) — int64 path param.
-	got, err := c.GetItem(ctx, created.Id)
+	// 4) GetItem(ctx, id) — int64 path param. The 200 response declares
+	// ETag and Cache-Control headers, so the method also returns a typed
+	// GetItemResponseHeaders struct.
+	got, gotHeaders, err := c.GetItem(ctx, created.Id)
 	must("getItem", err)
-	fmt.Printf("[4] getItem(%d): name=%q created_at=%q\n", got.Id, got.Name, got.CreatedAt)
+	fmt.Printf("[4] getItem(%d): name=%q etag=%s cache-control=%q\n",
+		got.Id, got.Name, gotHeaders.Etag, gotHeaders.CacheControl)
 
 	// 5) DeleteItem(ctx, id, idempotencyKey, ifMatch) — multiple required
 	// headers, ordered alphabetically by Go name.
