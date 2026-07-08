@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.1.1 - 2026-07-08
+#### Bug Fixes
+- (**gen/typed**) disambiguate colliding enum constant identifiers - (4cdbf4e) - Daniel Wasserlauf, *Claude Fable 5*
+
+- - -
+
 ## v0.1.0 - 2026-07-08
 #### Features
 - (**gen/typed**) decode RFC 7807 problem+json into APIError - (ff0ba72) - Daniel Wasserlauf, *Claude Fable 5*
