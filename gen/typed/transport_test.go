@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +26,12 @@ import (
 // - POST with an application/octet-stream body (streamed upload)
 // - GET with a text/csv response (streamed download)
 // - GET with declared response headers (typed headers struct)
+// - GET with an integer path param (non-string path formatting)
+// - POST with a JSON body plus optional query params of every scalar
+//   flavor: string, int64, and enum (the search shape)
+// - POST with a streamed body, a Content-Type header param that
+//   overrides the spec's media type, and a boolean query param
+//   (the bulk-upsert shape)
 const transportSpec = `
 openapi: 3.1.0
 info: {title: t, version: 0.0.1}
@@ -89,6 +96,41 @@ paths:
       operationId: wipeThing
       responses:
         '204': {description: no content}
+  /thing/by-num/{num}:
+    get:
+      operationId: getThingByNum
+      parameters:
+        - {name: num, in: path, required: true, schema: {type: integer, format: int64}}
+      responses:
+        '200':
+          description: ok
+          content: {application/json: {schema: {$ref: '#/components/schemas/Thing'}}}
+  /thing/search:
+    post:
+      operationId: searchThings
+      parameters:
+        - {name: cursor, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, format: int64}}
+        - {name: sort_by, in: query, schema: {type: string, enum: [name, created_at]}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, additionalProperties: true}}}
+      responses:
+        '200':
+          description: ok
+          content: {application/json: {schema: {$ref: '#/components/schemas/Thing'}}}
+  /thing/bulk:
+    post:
+      operationId: bulkThings
+      parameters:
+        - {name: Content-Type, in: header, schema: {type: string}}
+        - {name: skip_existing, in: query, schema: {type: boolean}}
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: {}
+      responses:
+        '204': {description: accepted}
   /thing/missing:
     get:
       operationId: getMissing
@@ -573,6 +615,139 @@ func main() {
 `)
 		Expect(gotAuth).To(Equal("Bearer top-level"))
 		Expect(gotIdem).To(Equal("per-call"))
+	})
+
+	It("formats integer path params as base-10 in the path", func() {
+		var gotPath string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"x","name":"y"}`))
+		}))
+		DeferCleanup(srv.Close)
+
+		runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"fmt"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	// GetThingByNum(ctx, num int64)
+	if _, err := c.GetThingByNum(context.Background(), 42); err != nil {
+		fmt.Println("ERR", err); os.Exit(1)
+	}
+}
+`)
+		Expect(gotPath).To(Equal("/thing/by-num/42"))
+	})
+
+	It("sends a JSON body and int64/enum query params on the same operation, omitting nil ones", func() {
+		var (
+			gotQuery url.Values
+			gotBody  map[string]any
+		)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.Query()
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"x","name":"y"}`))
+		}))
+		DeferCleanup(srv.Close)
+
+		runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"fmt"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	limit := int64(25)
+	sortBy := SearchThingsSortByCreatedAt
+	// SearchThings(ctx, cursor, limit, sortBy, body map[string]any) —
+	// a free-form (additionalProperties: true) body generates as
+	// map[string]any; cursor stays nil to prove omission.
+	filter := map[string]any{"and": []any{map[string]any{"field": "name", "op": "eq", "value": "x"}}}
+	if _, err := c.SearchThings(context.Background(), nil, &limit, &sortBy, filter); err != nil {
+		fmt.Println("ERR", err); os.Exit(1)
+	}
+}
+`)
+		Expect(gotQuery.Get("limit")).To(Equal("25"))
+		Expect(gotQuery.Get("sort_by")).To(Equal("created_at"))
+		Expect(gotQuery).NotTo(HaveKey("cursor"))
+		Expect(gotBody).To(Equal(map[string]any{
+			"and": []any{map[string]any{"field": "name", "op": "eq", "value": "x"}},
+		}))
+	})
+
+	It("lets a Content-Type header param override the spec media type on a streamed upload", func() {
+		var (
+			gotContentType string
+			gotQuery       url.Values
+			gotBody        string
+		)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotContentType = r.Header.Get("Content-Type")
+			gotQuery = r.URL.Query()
+			raw, _ := io.ReadAll(r.Body)
+			gotBody = string(raw)
+			w.WriteHeader(204)
+		}))
+		DeferCleanup(srv.Close)
+
+		runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	ct := "application/x-ndjson"
+	skip := true
+	// BulkThings(ctx, contentType, skipExisting, body io.Reader)
+	if err := c.BulkThings(context.Background(), &ct, &skip, strings.NewReader("{\"a\":1}\n")); err != nil {
+		fmt.Println("ERR", err); os.Exit(1)
+	}
+}
+`)
+		Expect(gotContentType).To(Equal("application/x-ndjson"))
+		Expect(gotQuery.Get("skip_existing")).To(Equal("true"))
+		Expect(gotBody).To(Equal("{\"a\":1}\n"))
+	})
+
+	It("falls back to the spec media type and omits nil optional params on a streamed upload", func() {
+		var (
+			gotContentType string
+			gotQuery       url.Values
+		)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotContentType = r.Header.Get("Content-Type")
+			gotQuery = r.URL.Query()
+			w.WriteHeader(204)
+		}))
+		DeferCleanup(srv.Close)
+
+		runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	if err := c.BulkThings(context.Background(), nil, nil, strings.NewReader("x")); err != nil {
+		fmt.Println("ERR", err); os.Exit(1)
+	}
+}
+`)
+		Expect(gotContentType).To(Equal("application/octet-stream"))
+		Expect(gotQuery).NotTo(HaveKey("skip_existing"))
 	})
 
 	It("propagates ctx cancellation through to the request", func() {
