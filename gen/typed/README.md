@@ -91,7 +91,8 @@ substituted with `url.PathEscape`.
   streamed from an `io.Reader` (see below)
 - Responses: first 2xx with `application/json`; non-JSON 2xx content is
   streamed as an `io.ReadCloser`; non-2xx returns a typed `*APIError`
-  carrying status code, raw body, and decoded RFC 7807 problem details
+  carrying status code, raw body, response headers (e.g. `Retry-After`
+  on 429), and decoded RFC 7807 problem details
 - Response headers declared on the success response → a typed
   `<Op>ResponseHeaders` struct returned alongside the body
 

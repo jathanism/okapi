@@ -46,6 +46,9 @@ type APIError struct {
 	// body parsed as a JSON object. nil otherwise; Body always keeps
 	// the raw bytes either way.
 	Problem *APIProblem
+	// Header holds the HTTP response headers, e.g. Retry-After on 429
+	// responses.
+	Header http.Header
 }
 
 func (e *APIError) Error() string {
@@ -101,6 +104,7 @@ func newAPIError(resp *http.Response, method, url string, body []byte) *APIError
 		Method:     method,
 		URL:        url,
 		Body:       body,
+		Header:     resp.Header,
 	}
 	mt, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if err == nil && (mt == "application/problem+json" || mt == "application/json") {
