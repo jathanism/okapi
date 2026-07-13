@@ -425,6 +425,34 @@ func main() {
 		Expect(strings.TrimSpace(out)).To(Equal(`502 problem=<nil>`))
 	})
 
+	It("exposes the response headers on APIError", func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", "17")
+			w.WriteHeader(429)
+			_, _ = w.Write([]byte(`slow down`))
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	_, err := c.GetMissing(context.Background())
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Header == nil {
+		fmt.Println("UNEXPECTED", err); os.Exit(1)
+	}
+	fmt.Printf("%d retry-after=%s\n", ae.StatusCode, ae.Header.Get("Retry-After"))
+}
+`)
+		Expect(strings.TrimSpace(out)).To(Equal(`429 retry-after=17`))
+	})
+
 	It("returns nil on a 204 with no result type", func() {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(204)

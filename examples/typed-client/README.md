@@ -128,6 +128,7 @@ type APIError struct {
     URL        string
     Body       []byte
     Problem    *APIProblem // decoded RFC 7807 body, when present
+    Header     http.Header // response headers, e.g. Retry-After on 429
 }
 func (e *APIError) Error() string
 ```
