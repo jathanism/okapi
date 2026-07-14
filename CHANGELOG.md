@@ -2,6 +2,18 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.2.0 - 2026-07-14
+#### Features
+- (**gen/typed**) expose response headers on APIError - (2989a64) - Daniel Wasserlauf, *Claude Fable 5*
+#### Documentation
+- (**gen/typed**) mention response headers in the APIError doc comment - (e0dee89) - Daniel Wasserlauf, *Claude Fable 5*
+#### Tests
+- (**gen/typed**) cover integer paths, scalar query params, and Content-Type override - (5f20ef5) - jathanism, *Claude Fable 5*
+#### Continuous Integration
+- scope release app token to this repository - (1ee224b) - jathanism, *Claude Fable 5*
+
+- - -
+
 ## v0.1.1 - 2026-07-08
 #### Bug Fixes
 - (**gen/typed**) disambiguate colliding enum constant identifiers - (4cdbf4e) - Daniel Wasserlauf, *Claude Fable 5*
