@@ -33,8 +33,8 @@ func NewClient(baseURL string) *Client {
 }
 
 // APIError is returned for non-2xx responses. It captures the HTTP
-// status, the raw response body, and — for JSON error bodies — the
-// decoded RFC 7807 problem details.
+// status, the response headers, the raw response body, and — for JSON
+// error bodies — the decoded RFC 7807 problem details.
 type APIError struct {
 	StatusCode int
 	Status     string
