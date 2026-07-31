@@ -177,10 +177,13 @@ if err != nil { /* non-2xx → *APIError with its own StatusCode */ }
 if resp.StatusCode == http.StatusCreated { /* freshly created */ }
 ```
 
-`APIResponse` is nil whenever the returned error is non-nil. Any 2xx —
-including one the spec doesn't declare — is treated as success and
-surfaced verbatim, so server-side drift (a documented 201 that is
-actually a 200) is observable rather than masked.
+`APIResponse` is non-nil whenever an HTTP response was received — on
+success, alongside the `*APIError` for non-2xx responses (go-github
+style), and on read/decode failures after a 2xx. It is nil only when
+no response arrived at all (request construction or transport errors).
+Any 2xx — including one the spec doesn't declare — is treated as
+success and surfaced verbatim, so server-side drift (a documented 201
+that is actually a 200) is observable rather than masked.
 
 ### RFC 7807 problem details
 

@@ -122,8 +122,9 @@ func (c *Client) ExportItems(ctx context.Context) (io.ReadCloser, *APIResponse, 
 func (c *Client) ImportItems(ctx context.Context, body io.Reader) (*APIResponse, error)
 
 // Every method returns *APIResponse just before the error: the exact
-// success status code (201 vs 200 vs 204, ...) and response headers.
-// It is nil whenever the error is non-nil.
+// status code (201 vs 200 vs 204, ...) and response headers. It is
+// non-nil whenever a response was received — even on error — and nil
+// only when the request never got a response (transport errors).
 type APIResponse struct {
     StatusCode int
     Header     http.Header

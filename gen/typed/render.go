@@ -116,11 +116,13 @@ func New` + g.opts.ClientName + `(baseURL string) *` + g.opts.ClientName + ` {
 	return &` + g.opts.ClientName + `{BaseURL: strings.TrimRight(baseURL, "/")}
 }
 
-// APIResponse carries the HTTP metadata of a successful response — the
-// exact status code (200 vs 201 vs 204, ...) and the response headers.
-// Every generated method returns it just before the error; it is nil
-// whenever the error is non-nil (non-2xx statuses arrive on *APIError,
-// which carries its own StatusCode and Header).
+// APIResponse carries the HTTP metadata of a response — the exact
+// status code (200 vs 201 vs 204, ...) and the response headers.
+// Every generated method returns it just before the error, and it is
+// non-nil whenever an HTTP response was received — including non-2xx
+// responses (alongside the *APIError) and 2xx responses whose body
+// failed to read or decode. It is nil only when no response arrived
+// at all (request construction or transport errors).
 type APIResponse struct {
 	StatusCode int
 	Header     http.Header
@@ -219,9 +221,10 @@ func (c *` + g.opts.ClientName + `) httpClient() *http.Client {
 }
 
 // send builds and issues one HTTP request and maps non-2xx responses
-// to *APIError. On success the caller owns resp.Body. Its signature is
-// what couples the generated methods to the manual transport plumbing —
-// keep it stable.
+// to *APIError. The *APIResponse is non-nil whenever a response was
+// received, even on error. On success the caller owns resp.Body. Its
+// signature is what couples the generated methods to the manual
+// transport plumbing — keep it stable.
 func (c *` + g.opts.ClientName + `) send(
 	ctx context.Context,
 	method, pathTemplate string,
@@ -230,7 +233,7 @@ func (c *` + g.opts.ClientName + `) send(
 	headers http.Header,
 	body io.Reader,
 	contentType, accept string,
-) (*http.Response, error) {
+) (*http.Response, *APIResponse, error) {
 	path := pathTemplate
 	for k, v := range pathParams {
 		// OpenAPI path params are single-segment values, so we escape "/"
@@ -246,7 +249,7 @@ func (c *` + g.opts.ClientName + `) send(
 
 	req, err := http.NewRequestWithContext(ctx, method, full, body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for k, vv := range c.DefaultHeaders {
 		for _, v := range vv {
@@ -267,24 +270,26 @@ func (c *` + g.opts.ClientName + `) send(
 
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	meta := &APIResponse{StatusCode: resp.StatusCode, Header: resp.Header}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("read response: %w", err)
+			return nil, meta, fmt.Errorf("read response: %w", err)
 		}
-		return nil, newAPIError(resp, method, full, respBody)
+		return nil, meta, newAPIError(resp, method, full, respBody)
 	}
-	return resp, nil
+	return resp, meta, nil
 }
 
 // do issues a request and decodes the JSON response body into out
 // (skipped when out is nil or the body is empty). The response
 // metadata is returned so methods can surface the status code and
-// declared headers.
+// declared headers; it stays non-nil on read and decode failures —
+// the server did respond, and the caller can still see how.
 func (c *` + g.opts.ClientName + `) do(
 	ctx context.Context,
 	method, pathTemplate string,
@@ -295,22 +300,21 @@ func (c *` + g.opts.ClientName + `) do(
 	contentType, accept string,
 	out any,
 ) (*APIResponse, error) {
-	resp, err := c.send(ctx, method, pathTemplate, pathParams, query, headers, body, contentType, accept)
+	resp, meta, err := c.send(ctx, method, pathTemplate, pathParams, query, headers, body, contentType, accept)
 	if err != nil {
-		return nil, err
+		return meta, err
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return meta, fmt.Errorf("read response: %w", err)
 	}
-	meta := &APIResponse{StatusCode: resp.StatusCode, Header: resp.Header}
 	if out == nil || len(respBody) == 0 {
 		return meta, nil
 	}
 	if err := json.Unmarshal(respBody, out); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		return meta, fmt.Errorf("decode response: %w", err)
 	}
 	return meta, nil
 }
@@ -326,11 +330,11 @@ func (c *` + g.opts.ClientName + `) doStream(
 	body io.Reader,
 	contentType, accept string,
 ) (io.ReadCloser, *APIResponse, error) {
-	resp, err := c.send(ctx, method, pathTemplate, pathParams, query, headers, body, contentType, accept)
+	resp, meta, err := c.send(ctx, method, pathTemplate, pathParams, query, headers, body, contentType, accept)
 	if err != nil {
-		return nil, nil, err
+		return nil, meta, err
 	}
-	return resp.Body, &APIResponse{StatusCode: resp.StatusCode, Header: resp.Header}, nil
+	return resp.Body, meta, nil
 }
 
 // jsonBody marshals v into an in-memory reader for the request body.
@@ -524,6 +528,12 @@ func renderOpMethod(b *strings.Builder, op *operation, clientName string) {
 		ret = "(" + strings.Join(retTypes, ", ") + ")"
 	}
 	errReturn := strings.Join(append(append([]string{}, zeroRets...), "err"), ", ")
+	// Post-transport errors return apiResp in the *APIResponse slot
+	// (the last zero return) — the response was received even though
+	// the call failed. errReturn stays for pre-request failures.
+	respRets := append([]string{}, zeroRets...)
+	respRets[len(respRets)-1] = "apiResp"
+	errReturnResp := strings.Join(append(respRets, "err"), ", ")
 
 	// Signature.
 	var sigArgs []string
@@ -590,7 +600,7 @@ func renderOpMethod(b *strings.Builder, op *operation, clientName string) {
 			"\trespBody, apiResp, err := c.doStream(ctx, %q, %q, pathParams, query, headers, %s, %s, %s)\n",
 			op.Method, op.Path, bodyArg, contentType, accept,
 		)
-		fmt.Fprintf(b, "\tif err != nil {\n\t\treturn %s\n\t}\n", errReturn)
+		fmt.Fprintf(b, "\tif err != nil {\n\t\treturn %s\n\t}\n", errReturnResp)
 		okRets = append(okRets, "respBody")
 	case op.HasResult:
 		b.WriteString("\tvar out " + strings.TrimPrefix(op.ResultType, "*") + "\n")
@@ -598,14 +608,14 @@ func renderOpMethod(b *strings.Builder, op *operation, clientName string) {
 			"\tapiResp, err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s, %s, &out)\n",
 			op.Method, op.Path, bodyArg, contentType, accept,
 		)
-		fmt.Fprintf(b, "\tif err != nil {\n\t\treturn %s\n\t}\n", errReturn)
+		fmt.Fprintf(b, "\tif err != nil {\n\t\treturn %s\n\t}\n", errReturnResp)
 		okRets = append(okRets, "&out")
 	default:
 		fmt.Fprintf(b,
 			"\tapiResp, err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s, %s, nil)\n",
 			op.Method, op.Path, bodyArg, contentType, accept,
 		)
-		fmt.Fprintf(b, "\tif err != nil {\n\t\treturn %s\n\t}\n", errReturn)
+		fmt.Fprintf(b, "\tif err != nil {\n\t\treturn %s\n\t}\n", errReturnResp)
 	}
 
 	// Decode declared response headers into the typed struct.
