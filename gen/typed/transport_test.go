@@ -131,6 +131,17 @@ paths:
           application/octet-stream: {}
       responses:
         '204': {description: accepted}
+  /thing/reserved:
+    get:
+      operationId: reservedWords
+      parameters:
+        - {name: query, in: query, schema: {type: string}}
+        - {name: api_resp, in: query, schema: {type: string}}
+        - {name: out, in: query, schema: {type: string}}
+      responses:
+        '200':
+          description: ok
+          content: {application/json: {schema: {$ref: '#/components/schemas/Thing'}}}
   /thing/missing:
     get:
       operationId: getMissing
@@ -476,9 +487,42 @@ func main() {
 		Expect(strings.TrimSpace(out)).To(Equal("OK"))
 	})
 
-	It("surfaces the success status code on the APIResponse return", func() {
+	It("escapes params named after generator locals and keeps their wire names", func() {
+		var gotQuery url.Values
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.Query()
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "abc", "name": "n"})
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"fmt"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	q, ar, o := "q1", "a1", "o1"
+	// reservedWords(ctx, apiResp, out, query) — alphabetical by Go name.
+	if _, _, err := c.ReservedWords(context.Background(), &ar, &o, &q); err != nil {
+		fmt.Println("ERR", err); os.Exit(1)
+	}
+	fmt.Println("OK")
+}
+`)
+		Expect(strings.TrimSpace(out)).To(Equal("OK"))
+		Expect(gotQuery.Get("query")).To(Equal("q1"))
+		Expect(gotQuery.Get("api_resp")).To(Equal("a1"))
+		Expect(gotQuery.Get("out")).To(Equal("o1"))
+	})
+
+	It("surfaces the success status code and headers on the APIResponse return", func() {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
+			// An undeclared header — readable only through APIResponse.Header.
+			w.Header().Set("Location", "/thing/abc")
 			w.WriteHeader(201)
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": "abc", "name": "n"})
 		}))
@@ -494,10 +538,64 @@ func main() {
 	c := NewClient(os.Getenv("BASE"))
 	r, resp, err := c.CreateThing(context.Background(), "key-1", nil, Thing{Id: "abc", Name: "n"})
 	if err != nil { fmt.Println("ERR", err); os.Exit(1) }
-	fmt.Println(r.Id, resp.StatusCode)
+	fmt.Println(r.Id, resp.StatusCode, resp.Header.Get("Location"))
 }
 `)
-		Expect(strings.TrimSpace(out)).To(Equal("abc 201"))
+		Expect(strings.TrimSpace(out)).To(Equal("abc 201 /thing/abc"))
+	})
+
+	It("populates APIResponse alongside the *APIError on non-2xx responses", func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", "17")
+			w.WriteHeader(500)
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	_, resp, err := c.GetMissing(context.Background())
+	var ae *APIError
+	if !errors.As(err, &ae) { fmt.Println("UNEXPECTED", err); os.Exit(1) }
+	if resp == nil { fmt.Println("NIL RESP"); os.Exit(1) }
+	fmt.Println(ae.StatusCode, resp.StatusCode, resp.Header.Get("Retry-After"))
+}
+`)
+		Expect(strings.TrimSpace(out)).To(Equal("500 500 17"))
+	})
+
+	It("keeps APIResponse when a 2xx body fails to decode", func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte("not-json{{"))
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	_, resp, err := c.GetThing(context.Background(), "x", nil)
+	if err == nil || !strings.Contains(err.Error(), "decode response") {
+		fmt.Println("UNEXPECTED", err); os.Exit(1)
+	}
+	if resp == nil { fmt.Println("NIL RESP"); os.Exit(1) }
+	fmt.Println(resp.StatusCode)
+}
+`)
+		Expect(strings.TrimSpace(out)).To(Equal("200"))
 	})
 
 	It("succeeds and reports the actual code when the server returns an undeclared 2xx", func() {
@@ -898,9 +996,13 @@ func main() {
 	c := NewClient(os.Getenv("BASE"))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := c.WipeThing(ctx, "x")
+	resp, err := c.WipeThing(ctx, "x")
 	if err == nil {
 		fmt.Println("EXPECTED ERROR"); os.Exit(1)
+	}
+	// No HTTP response was received, so APIResponse is nil.
+	if resp != nil {
+		fmt.Println("EXPECTED NIL RESP"); os.Exit(1)
 	}
 	if !errors.Is(err, context.Canceled) {
 		fmt.Println("UNEXPECTED", err); os.Exit(1)
