@@ -7,7 +7,7 @@ package:
 | File | Contents |
 | --- | --- |
 | `types.gen.go` | Typed structs for everything in `components.schemas`, plus named string enums for inline `enum:` schemas. |
-| `client.gen.go` | A `Client` struct with one method per `operationId`, each taking `(ctx, params <Op>Params)` and returning `(*<Response>, error)`. |
+| `client.gen.go` | A `Client` struct with one method per `operationId`, each taking `(ctx, params <Op>Params)` and returning `(*<Response>, *APIResponse, error)`. |
 
 The generated package depends only on the standard library — no okapi
 runtime import. This is the static counterpart to okapi's dynamic
@@ -68,7 +68,7 @@ type CreateContactParams struct {
 func (c *Client) CreateContact(
     ctx context.Context,
     params CreateContactParams,
-) (*Contact, error) {
+) (*Contact, *APIResponse, error) {
     // ...
 }
 ```
@@ -93,6 +93,9 @@ substituted with `url.PathEscape`.
   streamed as an `io.ReadCloser`; non-2xx returns a typed `*APIError`
   carrying status code, raw body, response headers (e.g. `Retry-After`
   on 429), and decoded RFC 7807 problem details
+- Exact status codes: every method returns an `*APIResponse` just
+  before the error, carrying the actual HTTP status code and response
+  headers (see below)
 - Response headers declared on the success response → a typed
   `<Op>ResponseHeaders` struct returned alongside the body
 
@@ -105,7 +108,7 @@ media type whose schema is `type: string, format: binary` — become an
 
 ```go
 // requestBody: {content: {application/octet-stream: {}}}
-func (c *Client) ImportItems(ctx context.Context, body io.Reader) error
+func (c *Client) ImportItems(ctx context.Context, body io.Reader) (*APIResponse, error)
 ```
 
 When an operation's 2xx response declares only non-JSON content (e.g.
@@ -115,7 +118,7 @@ body instead of decoding it. The caller must close it:
 
 ```go
 // responses: {'200': {content: {text/csv: {}}}}
-func (c *Client) ExportItems(ctx context.Context) (io.ReadCloser, error)
+func (c *Client) ExportItems(ctx context.Context) (io.ReadCloser, *APIResponse, error)
 ```
 
 The declared media type is also sent as the default `Accept` header.
@@ -146,14 +149,38 @@ type GetItemResponseHeaders struct {
     Etag         string
 }
 
-func (c *Client) GetItem(ctx context.Context, id int64) (*Item, GetItemResponseHeaders, error)
+func (c *Client) GetItem(ctx context.Context, id int64) (*Item, GetItemResponseHeaders, *APIResponse, error)
 ```
 
 Header values map through the same schema→Go-type logic as parameters;
 non-string primitives (e.g. `type: integer`) parse best-effort, and a
 missing or malformed value leaves the field at its zero value. Only
 operations that declare response headers change shape — everything
-else keeps the plain `(*T, error)` / `error` signatures.
+else keeps the plain `(*T, *APIResponse, error)` /
+`(*APIResponse, error)` signatures.
+
+### Exact status codes on APIResponse
+
+Success statuses are never collapsed to a boolean "ok": every generated
+method returns an `*APIResponse` as its second-to-last value, so a 200
+is distinguishable from a 201 or a 204 (and error statuses stay intact
+on `APIError.StatusCode`):
+
+```go
+type APIResponse struct {
+    StatusCode int
+    Header     http.Header
+}
+
+item, resp, err := c.CreateItem(ctx, "key-1", body)
+if err != nil { /* non-2xx → *APIError with its own StatusCode */ }
+if resp.StatusCode == http.StatusCreated { /* freshly created */ }
+```
+
+`APIResponse` is nil whenever the returned error is non-nil. Any 2xx —
+including one the spec doesn't declare — is treated as success and
+surfaced verbatim, so server-side drift (a documented 201 that is
+actually a 200) is observable rather than masked.
 
 ### RFC 7807 problem details
 

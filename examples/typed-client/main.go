@@ -32,8 +32,9 @@ func main() {
 	c := client.NewClient(srv.URL)
 	ctx := context.Background()
 
-	// 1) Healthz — no params, typed response.
-	h, err := c.Healthz(ctx)
+	// 1) Healthz — no params, typed response. Every method also returns
+	// a *client.APIResponse carrying the exact status code and headers.
+	h, _, err := c.Healthz(ctx)
 	must("healthz", err)
 	fmt.Printf("[1] healthz: status=%q\n", h.Status)
 
@@ -42,35 +43,36 @@ func main() {
 	// query key entirely when the arg is nil.
 	cursor := "page-1"
 	limit := int64(10)
-	list, err := c.ListItems(ctx, &cursor, &limit)
+	list, _, err := c.ListItems(ctx, &cursor, &limit)
 	must("listItems", err)
 	fmt.Printf("[2] listItems: %d item(s), first=%q\n", len(list.Items), list.Items[0].Name)
 
 	// 3) CreateItem(ctx, idempotencyKey, body) — required header + typed
 	// body as positional args. Removing idempotencyKey makes the build
-	// fail.
-	created, err := c.CreateItem(ctx, "key-1", client.CreateItemBody{Name: "Sprocket"})
+	// fail. The APIResponse distinguishes a 201 from any other 2xx.
+	created, createdResp, err := c.CreateItem(ctx, "key-1", client.CreateItemBody{Name: "Sprocket"})
 	must("createItem", err)
-	fmt.Printf("[3] createItem: id=%d name=%q\n", created.Id, created.Name)
+	fmt.Printf("[3] createItem: HTTP %d id=%d name=%q\n",
+		createdResp.StatusCode, created.Id, created.Name)
 
 	// 4) GetItem(ctx, id) — int64 path param. The 200 response declares
 	// ETag and Cache-Control headers, so the method also returns a typed
 	// GetItemResponseHeaders struct.
-	got, gotHeaders, err := c.GetItem(ctx, created.Id)
+	got, gotHeaders, _, err := c.GetItem(ctx, created.Id)
 	must("getItem", err)
 	fmt.Printf("[4] getItem(%d): name=%q etag=%s cache-control=%q\n",
 		got.Id, got.Name, gotHeaders.Etag, gotHeaders.CacheControl)
 
 	// 5) DeleteItem(ctx, id, idempotencyKey, ifMatch) — multiple required
-	// headers, ordered alphabetically by Go name.
-	if err := c.DeleteItem(ctx, created.Id, "key-2", "etag-abc"); err != nil {
-		log.Fatalf("deleteItem: %v", err)
-	}
-	fmt.Printf("[5] deleteItem(%d): 204 No Content\n", created.Id)
+	// headers, ordered alphabetically by Go name. Body-less operations
+	// return just the APIResponse, so the 204 is still observable.
+	delResp, err := c.DeleteItem(ctx, created.Id, "key-2", "etag-abc")
+	must("deleteItem", err)
+	fmt.Printf("[5] deleteItem(%d): HTTP %d\n", created.Id, delResp.StatusCode)
 
 	// 6) ExportItems(ctx) — a text/csv response is streamed back as an
 	// io.ReadCloser instead of being decoded; the caller must close it.
-	csvBody, err := c.ExportItems(ctx)
+	csvBody, _, err := c.ExportItems(ctx)
 	must("exportItems", err)
 	csvData, err := io.ReadAll(csvBody)
 	_ = csvBody.Close()
@@ -80,14 +82,14 @@ func main() {
 
 	// 7) ImportItems(ctx, body) — an application/octet-stream request
 	// body is streamed from any io.Reader, not buffered.
-	err = c.ImportItems(ctx, strings.NewReader("name\nGadget\n"))
+	_, err = c.ImportItems(ctx, strings.NewReader("name\nGadget\n"))
 	must("importItems", err)
 	fmt.Println("[7] importItems: 204 No Content")
 
 	// 8) Negative — server returns a 422 application/problem+json body
 	// when name is empty. The RFC 7807 members are decoded onto
 	// apiErr.Problem; apiErr.Body keeps the raw bytes either way.
-	_, err = c.CreateItem(ctx, "key-3", client.CreateItemBody{Name: ""})
+	_, _, err = c.CreateItem(ctx, "key-3", client.CreateItemBody{Name: ""})
 	var apiErr *client.APIError
 	switch {
 	case errors.As(err, &apiErr) && apiErr.Problem != nil:
