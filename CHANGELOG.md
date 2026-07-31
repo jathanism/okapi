@@ -2,6 +2,15 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.3.0 - 2026-07-31
+#### Features
+- <span style="background-color: #d73a49; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 0.85em;">BREAKING</span>(**gen/typed**) surface exact status codes via an APIResponse return - (95ba533) - jathanism, *Claude Fable 5*
+#### Bug Fixes
+- (**gen/typed**) keep APIResponse populated whenever a response was received - (e981742) - jathanism, *Claude Fable 5*
+- (**gen/typed**) escape params that collide with generated method locals - (9cca3e3) - jathanism, *Claude Fable 5*
+
+- - -
+
 ## v0.2.0 - 2026-07-14
 #### Features
 - (**gen/typed**) expose response headers on APIError - (2989a64) - Daniel Wasserlauf, *Claude Fable 5*
