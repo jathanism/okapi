@@ -176,12 +176,12 @@ var _ = Describe("Generate", func() {
 		// Per-op signatures: positional args, ordered path → header →
 		// query → body. Required scalar = value, optional = pointer.
 		Expect(client).To(ContainSubstring(
-			"func (c *Client) GetContact(ctx context.Context, aid string, ifMatch string) (*Contact, error)"))
+			"func (c *Client) GetContact(ctx context.Context, aid string, ifMatch string) (*Contact, *APIResponse, error)"))
 		Expect(client).To(ContainSubstring(
-			"func (c *Client) CreateContact(ctx context.Context, aid string, body CreateContactBody) (*Contact, error)"))
+			"func (c *Client) CreateContact(ctx context.Context, aid string, body CreateContactBody) (*Contact, *APIResponse, error)"))
 		// Array response stays a slice — return type is a value, not pointer.
 		Expect(client).To(ContainSubstring(
-			"func (c *Client) ListContacts(ctx context.Context, cursor *string) (*[]Contact, error)"))
+			"func (c *Client) ListContacts(ctx context.Context, cursor *string) (*[]Contact, *APIResponse, error)"))
 
 		// Header param wired to headers.Set with original case.
 		Expect(client).To(ContainSubstring(
@@ -330,11 +330,11 @@ func run() error {
 	ctx := context.Background()
 	cur := "abc"
 	// ListContacts(ctx, cursor *string)
-	if _, err := c.ListContacts(ctx, &cur); err != nil {
+	if _, _, err := c.ListContacts(ctx, &cur); err != nil {
 		return fmt.Errorf("list: %w", err)
 	}
 	// GetContact(ctx, aid, ifMatch)
-	got, err := c.GetContact(ctx, "acc-1", "etag-1")
+	got, _, err := c.GetContact(ctx, "acc-1", "etag-1")
 	if err != nil {
 		return fmt.Errorf("get: %w", err)
 	}

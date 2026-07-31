@@ -150,7 +150,7 @@ components:
 `))
 			// 201 < 202 lexicographically too; we should land on Result.
 			Expect(client).To(ContainSubstring(
-				"func (c *Client) CreateX(ctx context.Context) (*Result, error)"))
+				"func (c *Client) CreateX(ctx context.Context) (*Result, *APIResponse, error)"))
 		})
 
 		It("returns no result when 2xx has no application/json content", func() {
@@ -164,7 +164,7 @@ paths:
       responses:
         '204': {description: no content}
 `))
-			Expect(client).To(ContainSubstring("func (c *Client) DeleteX(ctx context.Context) error"))
+			Expect(client).To(ContainSubstring("func (c *Client) DeleteX(ctx context.Context) (*APIResponse, error)"))
 		})
 
 		It("treats an empty 2xx schema (any) as no result", func() {
@@ -180,7 +180,7 @@ paths:
           description: ok
           content: {application/json: {schema: {}}}
 `))
-			Expect(client).To(ContainSubstring("func (c *Client) GetX(ctx context.Context) error"))
+			Expect(client).To(ContainSubstring("func (c *Client) GetX(ctx context.Context) (*APIResponse, error)"))
 		})
 
 		It("streams a non-JSON 2xx response as io.ReadCloser", func() {
@@ -198,7 +198,7 @@ paths:
             text/csv: {}
 `))
 			Expect(client).To(ContainSubstring(
-				"func (c *Client) ExportX(ctx context.Context) (io.ReadCloser, error)"))
+				"func (c *Client) ExportX(ctx context.Context) (io.ReadCloser, *APIResponse, error)"))
 			// Streamed via doStream, with the declared media type as Accept.
 			Expect(client).To(ContainSubstring(
 				`c.doStream(ctx, "GET", "/x/export", pathParams, query, headers, nil, "", "text/csv")`))
@@ -221,7 +221,7 @@ paths:
             application/octet-stream: {schema: {type: string, format: binary}}
 `))
 			Expect(client).To(ContainSubstring(
-				"func (c *Client) GetBlob(ctx context.Context) (io.ReadCloser, error)"))
+				"func (c *Client) GetBlob(ctx context.Context) (io.ReadCloser, *APIResponse, error)"))
 		})
 
 		It("prefers application/json over non-JSON when a 2xx declares both", func() {
@@ -246,7 +246,7 @@ components:
       properties: {id: {type: integer, format: int64}}
 `))
 			Expect(client).To(ContainSubstring(
-				"func (c *Client) GetX(ctx context.Context) (*Result, error)"))
+				"func (c *Client) GetX(ctx context.Context) (*Result, *APIResponse, error)"))
 		})
 	})
 
@@ -283,10 +283,10 @@ components:
 			Expect(client).To(MatchRegexp(`Etag\s+string`))
 			// The method returns the struct as an additional value.
 			Expect(client).To(ContainSubstring(
-				"func (c *Client) GetItem(ctx context.Context, id string) (*Item, GetItemResponseHeaders, error)"))
+				"func (c *Client) GetItem(ctx context.Context, id string) (*Item, GetItemResponseHeaders, *APIResponse, error)"))
 			// Wire names keep their original case.
-			Expect(client).To(ContainSubstring(`outHeaders.Etag = respHeader.Get("ETag")`))
-			Expect(client).To(ContainSubstring(`outHeaders.CacheControl = respHeader.Get("Cache-Control")`))
+			Expect(client).To(ContainSubstring(`outHeaders.Etag = apiResp.Header.Get("ETag")`))
+			Expect(client).To(ContainSubstring(`outHeaders.CacheControl = apiResp.Header.Get("Cache-Control")`))
 		})
 
 		It("non-string header schemas parse through the param type mapping", func() {
@@ -306,7 +306,7 @@ paths:
 `))
 			Expect(client).To(MatchRegexp(`XTotalCount\s+int64`))
 			Expect(client).To(ContainSubstring(
-				`if v, err := strconv.ParseInt(respHeader.Get("X-Total-Count"), 10, 64); err == nil {`))
+				`if v, err := strconv.ParseInt(apiResp.Header.Get("X-Total-Count"), 10, 64); err == nil {`))
 		})
 
 		It("headers on a body-less success response still change the signature", func() {
@@ -324,7 +324,7 @@ paths:
             X-Request-Id: {schema: {type: string}}
 `))
 			Expect(client).To(ContainSubstring(
-				"func (c *Client) DeleteX(ctx context.Context) (DeleteXResponseHeaders, error)"))
+				"func (c *Client) DeleteX(ctx context.Context) (DeleteXResponseHeaders, *APIResponse, error)"))
 		})
 
 		It("headers on a streamed response ride alongside the io.ReadCloser", func() {
@@ -344,7 +344,7 @@ paths:
             text/csv: {}
 `))
 			Expect(client).To(ContainSubstring(
-				"func (c *Client) ExportX(ctx context.Context) (io.ReadCloser, ExportXResponseHeaders, error)"))
+				"func (c *Client) ExportX(ctx context.Context) (io.ReadCloser, ExportXResponseHeaders, *APIResponse, error)"))
 		})
 
 		It("ignores a declared Content-Type header, per OpenAPI 3", func() {
@@ -387,7 +387,7 @@ components:
       properties: {id: {type: string}}
 `))
 			Expect(client).To(ContainSubstring(
-				"func (c *Client) GetX(ctx context.Context) (*Item, error)"))
+				"func (c *Client) GetX(ctx context.Context) (*Item, *APIResponse, error)"))
 		})
 	})
 
@@ -451,7 +451,7 @@ paths:
       responses: {'201': {description: ok}}
 `))
 			// No Body field — only ctx in the signature.
-			Expect(client).To(ContainSubstring("func (c *Client) CreateX(ctx context.Context) error"))
+			Expect(client).To(ContainSubstring("func (c *Client) CreateX(ctx context.Context) (*APIResponse, error)"))
 		})
 
 		It("application/octet-stream body becomes a streamed io.Reader", func() {
@@ -469,7 +469,7 @@ paths:
       responses: {'204': {description: ok}}
 `))
 			Expect(client).To(ContainSubstring(
-				"func (c *Client) UploadX(ctx context.Context, body io.Reader) error"))
+				"func (c *Client) UploadX(ctx context.Context, body io.Reader) (*APIResponse, error)"))
 			// The reader is handed to the transport untouched, with the
 			// declared media type as Content-Type.
 			Expect(client).To(ContainSubstring(
@@ -494,7 +494,7 @@ paths:
       responses: {'204': {description: ok}}
 `))
 			Expect(client).To(ContainSubstring(
-				"func (c *Client) UploadX(ctx context.Context, body io.Reader) error"))
+				"func (c *Client) UploadX(ctx context.Context, body io.Reader) (*APIResponse, error)"))
 			Expect(client).To(ContainSubstring(`body, "text/csv",`))
 		})
 
@@ -520,7 +520,7 @@ components:
       properties: {name: {type: string}}
 `))
 			Expect(client).To(ContainSubstring(
-				"func (c *Client) CreateX(ctx context.Context, body Req) error"))
+				"func (c *Client) CreateX(ctx context.Context, body Req) (*APIResponse, error)"))
 		})
 	})
 

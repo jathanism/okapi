@@ -219,7 +219,7 @@ func main() {
 	c := NewClient(os.Getenv("BASE"))
 	trace := "t1"
 	// CreateThing(ctx, idempotencyKey, xTrace, body)
-	r, err := c.CreateThing(context.Background(), "key-1", &trace, Thing{Id: "abc", Name: "n"})
+	r, _, err := c.CreateThing(context.Background(), "key-1", &trace, Thing{Id: "abc", Name: "n"})
 	if err != nil { fmt.Println("ERR", err); os.Exit(1) }
 	fmt.Println(r.Id, r.Name)
 }
@@ -259,7 +259,7 @@ func main() {
 	c := NewClient(os.Getenv("BASE"))
 	cur := "page=2"
 	// GetThing(ctx, id, cursor)
-	if _, err := c.GetThing(context.Background(), "weird id/with slash", &cur); err != nil {
+	if _, _, err := c.GetThing(context.Background(), "weird id/with slash", &cur); err != nil {
 		fmt.Println("ERR", err); os.Exit(1)
 	}
 }
@@ -289,7 +289,7 @@ import (
 )
 func main() {
 	c := NewClient(os.Getenv("BASE"))
-	_, err := c.GetMissing(context.Background())
+	_, _, err := c.GetMissing(context.Background())
 	var ae *APIError
 	if errors.As(err, &ae) {
 		fmt.Printf("APIError(%d) %s\n", ae.StatusCode, string(ae.Body))
@@ -327,7 +327,7 @@ import (
 )
 func main() {
 	c := NewClient(os.Getenv("BASE"))
-	_, err := c.GetMissing(context.Background())
+	_, _, err := c.GetMissing(context.Background())
 	var ae *APIError
 	if !errors.As(err, &ae) || ae.Problem == nil {
 		fmt.Println("UNEXPECTED", err); os.Exit(1)
@@ -358,7 +358,7 @@ import (
 )
 func main() {
 	c := NewClient(os.Getenv("BASE"))
-	_, err := c.GetMissing(context.Background())
+	_, _, err := c.GetMissing(context.Background())
 	var ae *APIError
 	if !errors.As(err, &ae) {
 		fmt.Println("UNEXPECTED", err); os.Exit(1)
@@ -386,7 +386,7 @@ import (
 )
 func main() {
 	c := NewClient(os.Getenv("BASE"))
-	_, err := c.GetMissing(context.Background())
+	_, _, err := c.GetMissing(context.Background())
 	var ae *APIError
 	if !errors.As(err, &ae) || ae.Problem == nil {
 		fmt.Println("UNEXPECTED", err); os.Exit(1)
@@ -414,7 +414,7 @@ import (
 )
 func main() {
 	c := NewClient(os.Getenv("BASE"))
-	_, err := c.GetMissing(context.Background())
+	_, _, err := c.GetMissing(context.Background())
 	var ae *APIError
 	if !errors.As(err, &ae) {
 		fmt.Println("UNEXPECTED", err); os.Exit(1)
@@ -442,7 +442,7 @@ import (
 )
 func main() {
 	c := NewClient(os.Getenv("BASE"))
-	_, err := c.GetMissing(context.Background())
+	_, _, err := c.GetMissing(context.Background())
 	var ae *APIError
 	if !errors.As(err, &ae) || ae.Header == nil {
 		fmt.Println("UNEXPECTED", err); os.Exit(1)
@@ -467,13 +467,114 @@ import (
 )
 func main() {
 	c := NewClient(os.Getenv("BASE"))
-	if err := c.WipeThing(context.Background(), "x"); err != nil {
+	if _, err := c.WipeThing(context.Background(), "x"); err != nil {
 		fmt.Println("ERR", err); os.Exit(1)
 	}
 	fmt.Println("OK")
 }
 `)
 		Expect(strings.TrimSpace(out)).To(Equal("OK"))
+	})
+
+	It("surfaces the success status code on the APIResponse return", func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(201)
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "abc", "name": "n"})
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"fmt"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	r, resp, err := c.CreateThing(context.Background(), "key-1", nil, Thing{Id: "abc", Name: "n"})
+	if err != nil { fmt.Println("ERR", err); os.Exit(1) }
+	fmt.Println(r.Id, resp.StatusCode)
+}
+`)
+		Expect(strings.TrimSpace(out)).To(Equal("abc 201"))
+	})
+
+	It("succeeds and reports the actual code when the server returns an undeclared 2xx", func() {
+		// createThing declares only '201' in the spec. A server that has
+		// drifted to replying 200 (the "this is actually a 200 replace"
+		// case) still succeeds — and the drift is observable on
+		// APIResponse.StatusCode instead of being silently collapsed.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "abc", "name": "n"})
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"fmt"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	r, resp, err := c.CreateThing(context.Background(), "key-1", nil, Thing{Id: "abc", Name: "n"})
+	if err != nil { fmt.Println("ERR", err); os.Exit(1) }
+	fmt.Println(r.Id, resp.StatusCode)
+}
+`)
+		Expect(strings.TrimSpace(out)).To(Equal("abc 200"))
+	})
+
+	It("surfaces the status code on body-less operations", func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(204)
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"fmt"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	resp, err := c.WipeThing(context.Background(), "x")
+	if err != nil { fmt.Println("ERR", err); os.Exit(1) }
+	fmt.Println(resp.StatusCode)
+}
+`)
+		Expect(strings.TrimSpace(out)).To(Equal("204"))
+	})
+
+	It("surfaces the status code alongside a streamed response body", func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/csv")
+			w.WriteHeader(206)
+			_, _ = w.Write([]byte("a,b\n"))
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	body, resp, err := c.ExportThings(context.Background())
+	if err != nil { fmt.Println("ERR", err); os.Exit(1) }
+	defer body.Close()
+	raw, _ := io.ReadAll(body)
+	fmt.Println(resp.StatusCode, len(raw))
+}
+`)
+		Expect(strings.TrimSpace(out)).To(Equal("206 4"))
 	})
 
 	It("streams an application/octet-stream body without buffering it", func() {
@@ -509,7 +610,7 @@ func (o opaque) Read(p []byte) (int, error) { return o.r.Read(p) }
 func main() {
 	c := NewClient(os.Getenv("BASE"))
 	// ImportThings(ctx, body io.Reader)
-	if err := c.ImportThings(context.Background(), opaque{strings.NewReader("raw,bytes\n1,2\n")}); err != nil {
+	if _, err := c.ImportThings(context.Background(), opaque{strings.NewReader("raw,bytes\n1,2\n")}); err != nil {
 		fmt.Println("ERR", err); os.Exit(1)
 	}
 	fmt.Println("OK")
@@ -543,7 +644,7 @@ import (
 func main() {
 	c := NewClient(os.Getenv("BASE"))
 	// ExportThings(ctx) (io.ReadCloser, error) — caller closes.
-	body, err := c.ExportThings(context.Background())
+	body, _, err := c.ExportThings(context.Background())
 	if err != nil { fmt.Println("ERR", err); os.Exit(1) }
 	defer body.Close()
 	raw, err := io.ReadAll(body)
@@ -574,7 +675,7 @@ import (
 func main() {
 	c := NewClient(os.Getenv("BASE"))
 	// GetVersionedThing(ctx, id) (*Thing, GetVersionedThingResponseHeaders, error)
-	thing, h, err := c.GetVersionedThing(context.Background(), "x")
+	thing, h, _, err := c.GetVersionedThing(context.Background(), "x")
 	if err != nil { fmt.Println("ERR", err); os.Exit(1) }
 	fmt.Printf("%s etag=%s total=%d\n", thing.Name, h.Etag, h.XTotalCount)
 }
@@ -600,7 +701,7 @@ import (
 )
 func main() {
 	c := NewClient(os.Getenv("BASE"))
-	_, h, err := c.GetVersionedThing(context.Background(), "x")
+	_, h, _, err := c.GetVersionedThing(context.Background(), "x")
 	if err != nil { fmt.Println("ERR", err); os.Exit(1) }
 	fmt.Printf("etag=%q total=%d\n", h.Etag, h.XTotalCount)
 }
@@ -636,7 +737,7 @@ func main() {
 		"Idempotency-Key": []string{"will-be-overridden"},
 	}
 	// CreateThing(ctx, idempotencyKey, xTrace, body)
-	if _, err := c.CreateThing(context.Background(), "per-call", nil, Thing{Id: "x", Name: "y"}); err != nil {
+	if _, _, err := c.CreateThing(context.Background(), "per-call", nil, Thing{Id: "x", Name: "y"}); err != nil {
 		fmt.Println("ERR", err); os.Exit(1)
 	}
 }
@@ -663,7 +764,7 @@ import (
 func main() {
 	c := NewClient(os.Getenv("BASE"))
 	// GetThingByNum(ctx, num int64)
-	if _, err := c.GetThingByNum(context.Background(), 42); err != nil {
+	if _, _, err := c.GetThingByNum(context.Background(), 42); err != nil {
 		fmt.Println("ERR", err); os.Exit(1)
 	}
 }
@@ -698,7 +799,7 @@ func main() {
 	// a free-form (additionalProperties: true) body generates as
 	// map[string]any; cursor stays nil to prove omission.
 	filter := map[string]any{"and": []any{map[string]any{"field": "name", "op": "eq", "value": "x"}}}
-	if _, err := c.SearchThings(context.Background(), nil, &limit, &sortBy, filter); err != nil {
+	if _, _, err := c.SearchThings(context.Background(), nil, &limit, &sortBy, filter); err != nil {
 		fmt.Println("ERR", err); os.Exit(1)
 	}
 }
@@ -738,7 +839,7 @@ func main() {
 	ct := "application/x-ndjson"
 	skip := true
 	// BulkThings(ctx, contentType, skipExisting, body io.Reader)
-	if err := c.BulkThings(context.Background(), &ct, &skip, strings.NewReader("{\"a\":1}\n")); err != nil {
+	if _, err := c.BulkThings(context.Background(), &ct, &skip, strings.NewReader("{\"a\":1}\n")); err != nil {
 		fmt.Println("ERR", err); os.Exit(1)
 	}
 }
@@ -769,7 +870,7 @@ import (
 )
 func main() {
 	c := NewClient(os.Getenv("BASE"))
-	if err := c.BulkThings(context.Background(), nil, nil, strings.NewReader("x")); err != nil {
+	if _, err := c.BulkThings(context.Background(), nil, nil, strings.NewReader("x")); err != nil {
 		fmt.Println("ERR", err); os.Exit(1)
 	}
 }
@@ -797,7 +898,7 @@ func main() {
 	c := NewClient(os.Getenv("BASE"))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := c.WipeThing(ctx, "x")
+	_, err := c.WipeThing(ctx, "x")
 	if err == nil {
 		fmt.Println("EXPECTED ERROR"); os.Exit(1)
 	}

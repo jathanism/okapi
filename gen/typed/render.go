@@ -116,6 +116,16 @@ func New` + g.opts.ClientName + `(baseURL string) *` + g.opts.ClientName + ` {
 	return &` + g.opts.ClientName + `{BaseURL: strings.TrimRight(baseURL, "/")}
 }
 
+// APIResponse carries the HTTP metadata of a successful response — the
+// exact status code (200 vs 201 vs 204, ...) and the response headers.
+// Every generated method returns it just before the error; it is nil
+// whenever the error is non-nil (non-2xx statuses arrive on *APIError,
+// which carries its own StatusCode and Header).
+type APIResponse struct {
+	StatusCode int
+	Header     http.Header
+}
+
 // APIError is returned for non-2xx responses. It captures the HTTP
 // status, the response headers, the raw response body, and — for JSON
 // error bodies — the decoded RFC 7807 problem details.
@@ -272,8 +282,9 @@ func (c *` + g.opts.ClientName + `) send(
 }
 
 // do issues a request and decodes the JSON response body into out
-// (skipped when out is nil or the body is empty). The response headers
-// are returned so methods can surface declared ones.
+// (skipped when out is nil or the body is empty). The response
+// metadata is returned so methods can surface the status code and
+// declared headers.
 func (c *` + g.opts.ClientName + `) do(
 	ctx context.Context,
 	method, pathTemplate string,
@@ -283,7 +294,7 @@ func (c *` + g.opts.ClientName + `) do(
 	body io.Reader,
 	contentType, accept string,
 	out any,
-) (http.Header, error) {
+) (*APIResponse, error) {
 	resp, err := c.send(ctx, method, pathTemplate, pathParams, query, headers, body, contentType, accept)
 	if err != nil {
 		return nil, err
@@ -294,13 +305,14 @@ func (c *` + g.opts.ClientName + `) do(
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
+	meta := &APIResponse{StatusCode: resp.StatusCode, Header: resp.Header}
 	if out == nil || len(respBody) == 0 {
-		return resp.Header, nil
+		return meta, nil
 	}
 	if err := json.Unmarshal(respBody, out); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
-	return resp.Header, nil
+	return meta, nil
 }
 
 // doStream issues a request and hands the raw response body back to
@@ -313,12 +325,12 @@ func (c *` + g.opts.ClientName + `) doStream(
 	headers http.Header,
 	body io.Reader,
 	contentType, accept string,
-) (io.ReadCloser, http.Header, error) {
+) (io.ReadCloser, *APIResponse, error) {
 	resp, err := c.send(ctx, method, pathTemplate, pathParams, query, headers, body, contentType, accept)
 	if err != nil {
 		return nil, nil, err
 	}
-	return resp.Body, resp.Header, nil
+	return resp.Body, &APIResponse{StatusCode: resp.StatusCode, Header: resp.Header}, nil
 }
 
 // jsonBody marshals v into an in-memory reader for the request body.
@@ -489,8 +501,8 @@ func renderOpMethod(b *strings.Builder, op *operation, clientName string) {
 	}
 
 	// Return list: result (JSON *T or streamed io.ReadCloser), then the
-	// declared-headers struct, then error. zeroRets are the non-error
-	// return values on the error path.
+	// declared-headers struct, then *APIResponse, then error. zeroRets
+	// are the non-error return values on the error path.
 	var retTypes, zeroRets []string
 	switch {
 	case op.HasResult:
@@ -504,6 +516,8 @@ func renderOpMethod(b *strings.Builder, op *operation, clientName string) {
 		retTypes = append(retTypes, op.HeadersName)
 		zeroRets = append(zeroRets, op.HeadersName+"{}")
 	}
+	retTypes = append(retTypes, "*APIResponse")
+	zeroRets = append(zeroRets, "nil")
 	retTypes = append(retTypes, "error")
 	ret := retTypes[0]
 	if len(retTypes) > 1 {
@@ -567,50 +581,31 @@ func renderOpMethod(b *strings.Builder, op *operation, clientName string) {
 	}
 
 	// Result / transport call. okRets accumulates the values returned on
-	// the success path, in signature order.
+	// the success path, in signature order. apiResp is always captured:
+	// every method surfaces the exact success status code.
 	var okRets []string
 	switch {
 	case op.ResultStream:
-		headerVar := "_"
-		if op.HeadersName != "" {
-			headerVar = "respHeader"
-		}
 		fmt.Fprintf(b,
-			"\trespBody, %s, err := c.doStream(ctx, %q, %q, pathParams, query, headers, %s, %s, %s)\n",
-			headerVar, op.Method, op.Path, bodyArg, contentType, accept,
+			"\trespBody, apiResp, err := c.doStream(ctx, %q, %q, pathParams, query, headers, %s, %s, %s)\n",
+			op.Method, op.Path, bodyArg, contentType, accept,
 		)
 		fmt.Fprintf(b, "\tif err != nil {\n\t\treturn %s\n\t}\n", errReturn)
 		okRets = append(okRets, "respBody")
 	case op.HasResult:
 		b.WriteString("\tvar out " + strings.TrimPrefix(op.ResultType, "*") + "\n")
-		if op.HeadersName != "" {
-			fmt.Fprintf(b,
-				"\trespHeader, err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s, %s, &out)\n",
-				op.Method, op.Path, bodyArg, contentType, accept,
-			)
-			fmt.Fprintf(b, "\tif err != nil {\n\t\treturn %s\n\t}\n", errReturn)
-		} else {
-			fmt.Fprintf(b,
-				"\tif _, err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s, %s, &out); err != nil {\n",
-				op.Method, op.Path, bodyArg, contentType, accept,
-			)
-			fmt.Fprintf(b, "\t\treturn %s\n\t}\n", errReturn)
-		}
+		fmt.Fprintf(b,
+			"\tapiResp, err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s, %s, &out)\n",
+			op.Method, op.Path, bodyArg, contentType, accept,
+		)
+		fmt.Fprintf(b, "\tif err != nil {\n\t\treturn %s\n\t}\n", errReturn)
 		okRets = append(okRets, "&out")
 	default:
-		if op.HeadersName != "" {
-			fmt.Fprintf(b,
-				"\trespHeader, err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s, %s, nil)\n",
-				op.Method, op.Path, bodyArg, contentType, accept,
-			)
-			fmt.Fprintf(b, "\tif err != nil {\n\t\treturn %s\n\t}\n", errReturn)
-		} else {
-			fmt.Fprintf(b,
-				"\tif _, err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s, %s, nil); err != nil {\n",
-				op.Method, op.Path, bodyArg, contentType, accept,
-			)
-			fmt.Fprintf(b, "\t\treturn %s\n\t}\n", errReturn)
-		}
+		fmt.Fprintf(b,
+			"\tapiResp, err := c.do(ctx, %q, %q, pathParams, query, headers, %s, %s, %s, nil)\n",
+			op.Method, op.Path, bodyArg, contentType, accept,
+		)
+		fmt.Fprintf(b, "\tif err != nil {\n\t\treturn %s\n\t}\n", errReturn)
 	}
 
 	// Decode declared response headers into the typed struct.
@@ -622,7 +617,7 @@ func renderOpMethod(b *strings.Builder, op *operation, clientName string) {
 		okRets = append(okRets, "outHeaders")
 	}
 
-	okRets = append(okRets, "nil")
+	okRets = append(okRets, "apiResp", "nil")
 	fmt.Fprintf(b, "\treturn %s\n", strings.Join(okRets, ", "))
 	b.WriteString("}\n\n")
 }
@@ -631,7 +626,7 @@ func renderOpMethod(b *strings.Builder, op *operation, clientName string) {
 // typed outHeaders field. Non-string primitives parse best-effort: a
 // missing or malformed value leaves the field at its zero value.
 func renderHeaderDecode(b *strings.Builder, h *respHeaderField) {
-	get := fmt.Sprintf("respHeader.Get(%q)", h.WireName)
+	get := fmt.Sprintf("apiResp.Header.Get(%q)", h.WireName)
 	switch h.Parse {
 	case "cast":
 		fmt.Fprintf(b, "\toutHeaders.%s = %s(%s)\n", h.GoName, h.GoType, get)

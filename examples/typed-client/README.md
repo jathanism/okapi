@@ -35,9 +35,9 @@ Expected output:
 ```text
 [1] healthz: status="ok"
 [2] listItems: 1 item(s), first="Widget"
-[3] createItem: id=2 name="Sprocket"
+[3] createItem: HTTP 201 id=2 name="Sprocket"
 [4] getItem(2): name="Widget" etag="item-2-v1" cache-control="max-age=60"
-[5] deleteItem(2): 204 No Content
+[5] deleteItem(2): HTTP 204
 [6] exportItems: 17 bytes of csv, header "id,name"
 [7] importItems: 204 No Content
 [8] empty name → APIError(422) title="Unprocessable Entity" detail="name is required"
@@ -96,13 +96,13 @@ type Client struct { /* BaseURL, *http.Client, DefaultHeaders */ }
 
 func NewClient(baseURL string) *Client
 
-func (c *Client) Healthz(ctx context.Context) (*Health, error)
+func (c *Client) Healthz(ctx context.Context) (*Health, *APIResponse, error)
 
 // Optional query params are *T — pass nil to omit.
-func (c *Client) ListItems(ctx context.Context, cursor *string, limit *int64) (*ItemList, error)
+func (c *Client) ListItems(ctx context.Context, cursor *string, limit *int64) (*ItemList, *APIResponse, error)
 
 // Required header + body. Removing an arg fails to compile.
-func (c *Client) CreateItem(ctx context.Context, idempotencyKey string, body CreateItemBody) (*Item, error)
+func (c *Client) CreateItem(ctx context.Context, idempotencyKey string, body CreateItemBody) (*Item, *APIResponse, error)
 
 // int64 path param. The 200 declares ETag and Cache-Control headers,
 // so a typed headers struct rides alongside the body.
@@ -110,16 +110,24 @@ type GetItemResponseHeaders struct {
     CacheControl string
     Etag         string
 }
-func (c *Client) GetItem(ctx context.Context, id int64) (*Item, GetItemResponseHeaders, error)
+func (c *Client) GetItem(ctx context.Context, id int64) (*Item, GetItemResponseHeaders, *APIResponse, error)
 
 // Multiple required headers — alphabetical order by Go name.
-func (c *Client) DeleteItem(ctx context.Context, id int64, idempotencyKey string, ifMatch string) error
+func (c *Client) DeleteItem(ctx context.Context, id int64, idempotencyKey string, ifMatch string) (*APIResponse, error)
 
 // text/csv response — streamed back as an io.ReadCloser (caller closes).
-func (c *Client) ExportItems(ctx context.Context) (io.ReadCloser, error)
+func (c *Client) ExportItems(ctx context.Context) (io.ReadCloser, *APIResponse, error)
 
 // application/octet-stream request body — streamed from any io.Reader.
-func (c *Client) ImportItems(ctx context.Context, body io.Reader) error
+func (c *Client) ImportItems(ctx context.Context, body io.Reader) (*APIResponse, error)
+
+// Every method returns *APIResponse just before the error: the exact
+// success status code (201 vs 200 vs 204, ...) and response headers.
+// It is nil whenever the error is non-nil.
+type APIResponse struct {
+    StatusCode int
+    Header     http.Header
+}
 
 type APIError struct {
     StatusCode int

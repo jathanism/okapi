@@ -32,6 +32,16 @@ func NewClient(baseURL string) *Client {
 	return &Client{BaseURL: strings.TrimRight(baseURL, "/")}
 }
 
+// APIResponse carries the HTTP metadata of a successful response — the
+// exact status code (200 vs 201 vs 204, ...) and the response headers.
+// Every generated method returns it just before the error; it is nil
+// whenever the error is non-nil (non-2xx statuses arrive on *APIError,
+// which carries its own StatusCode and Header).
+type APIResponse struct {
+	StatusCode int
+	Header     http.Header
+}
+
 // APIError is returned for non-2xx responses. It captures the HTTP
 // status, the response headers, the raw response body, and — for JSON
 // error bodies — the decoded RFC 7807 problem details.
@@ -188,8 +198,9 @@ func (c *Client) send(
 }
 
 // do issues a request and decodes the JSON response body into out
-// (skipped when out is nil or the body is empty). The response headers
-// are returned so methods can surface declared ones.
+// (skipped when out is nil or the body is empty). The response
+// metadata is returned so methods can surface the status code and
+// declared headers.
 func (c *Client) do(
 	ctx context.Context,
 	method, pathTemplate string,
@@ -199,7 +210,7 @@ func (c *Client) do(
 	body io.Reader,
 	contentType, accept string,
 	out any,
-) (http.Header, error) {
+) (*APIResponse, error) {
 	resp, err := c.send(ctx, method, pathTemplate, pathParams, query, headers, body, contentType, accept)
 	if err != nil {
 		return nil, err
@@ -210,13 +221,14 @@ func (c *Client) do(
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
+	meta := &APIResponse{StatusCode: resp.StatusCode, Header: resp.Header}
 	if out == nil || len(respBody) == 0 {
-		return resp.Header, nil
+		return meta, nil
 	}
 	if err := json.Unmarshal(respBody, out); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
-	return resp.Header, nil
+	return meta, nil
 }
 
 // doStream issues a request and hands the raw response body back to
@@ -229,12 +241,12 @@ func (c *Client) doStream(
 	headers http.Header,
 	body io.Reader,
 	contentType, accept string,
-) (io.ReadCloser, http.Header, error) {
+) (io.ReadCloser, *APIResponse, error) {
 	resp, err := c.send(ctx, method, pathTemplate, pathParams, query, headers, body, contentType, accept)
 	if err != nil {
 		return nil, nil, err
 	}
-	return resp.Body, resp.Header, nil
+	return resp.Body, &APIResponse{StatusCode: resp.StatusCode, Header: resp.Header}, nil
 }
 
 // jsonBody marshals v into an in-memory reader for the request body.
@@ -274,7 +286,7 @@ func formatPathValue(v any) string {
 }
 
 // Create an item
-func (c *Client) CreateItem(ctx context.Context, idempotencyKey string, body CreateItemBody) (*Item, error) {
+func (c *Client) CreateItem(ctx context.Context, idempotencyKey string, body CreateItemBody) (*Item, *APIResponse, error) {
 	pathParams := map[string]string{}
 	query := url.Values{}
 	headers := http.Header{}
@@ -284,17 +296,18 @@ func (c *Client) CreateItem(ctx context.Context, idempotencyKey string, body Cre
 	headers.Set("Idempotency-Key", formatPathValue(idempotencyKey))
 	bodyReader, err := jsonBody(body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var out Item
-	if _, err := c.do(ctx, "POST", "/items", pathParams, query, headers, bodyReader, "application/json", "application/json", &out); err != nil {
-		return nil, err
+	apiResp, err := c.do(ctx, "POST", "/items", pathParams, query, headers, bodyReader, "application/json", "application/json", &out)
+	if err != nil {
+		return nil, nil, err
 	}
-	return &out, nil
+	return &out, apiResp, nil
 }
 
 // Delete an item
-func (c *Client) DeleteItem(ctx context.Context, id int64, idempotencyKey string, ifMatch string) error {
+func (c *Client) DeleteItem(ctx context.Context, id int64, idempotencyKey string, ifMatch string) (*APIResponse, error) {
 	pathParams := map[string]string{}
 	query := url.Values{}
 	headers := http.Header{}
@@ -304,28 +317,29 @@ func (c *Client) DeleteItem(ctx context.Context, id int64, idempotencyKey string
 	pathParams["id"] = formatPathValue(id)
 	headers.Set("Idempotency-Key", formatPathValue(idempotencyKey))
 	headers.Set("If-Match", formatPathValue(ifMatch))
-	if _, err := c.do(ctx, "DELETE", "/items/{id}", pathParams, query, headers, nil, "", "application/json", nil); err != nil {
-		return err
+	apiResp, err := c.do(ctx, "DELETE", "/items/{id}", pathParams, query, headers, nil, "", "application/json", nil)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	return apiResp, nil
 }
 
 // Export items as CSV
 //
 // The returned io.ReadCloser streams the raw text/csv response body;
 // the caller must close it.
-func (c *Client) ExportItems(ctx context.Context) (io.ReadCloser, error) {
+func (c *Client) ExportItems(ctx context.Context) (io.ReadCloser, *APIResponse, error) {
 	pathParams := map[string]string{}
 	query := url.Values{}
 	headers := http.Header{}
 	_ = pathParams
 	_ = query
 	_ = headers
-	respBody, _, err := c.doStream(ctx, "GET", "/items/export", pathParams, query, headers, nil, "", "text/csv")
+	respBody, apiResp, err := c.doStream(ctx, "GET", "/items/export", pathParams, query, headers, nil, "", "text/csv")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return respBody, nil
+	return respBody, apiResp, nil
 }
 
 // GetItemResponseHeaders carries the response headers declared on GetItem's
@@ -338,7 +352,7 @@ type GetItemResponseHeaders struct {
 }
 
 // Get an item
-func (c *Client) GetItem(ctx context.Context, id int64) (*Item, GetItemResponseHeaders, error) {
+func (c *Client) GetItem(ctx context.Context, id int64) (*Item, GetItemResponseHeaders, *APIResponse, error) {
 	pathParams := map[string]string{}
 	query := url.Values{}
 	headers := http.Header{}
@@ -347,18 +361,18 @@ func (c *Client) GetItem(ctx context.Context, id int64) (*Item, GetItemResponseH
 	_ = headers
 	pathParams["id"] = formatPathValue(id)
 	var out Item
-	respHeader, err := c.do(ctx, "GET", "/items/{id}", pathParams, query, headers, nil, "", "application/json", &out)
+	apiResp, err := c.do(ctx, "GET", "/items/{id}", pathParams, query, headers, nil, "", "application/json", &out)
 	if err != nil {
-		return nil, GetItemResponseHeaders{}, err
+		return nil, GetItemResponseHeaders{}, nil, err
 	}
 	outHeaders := GetItemResponseHeaders{}
-	outHeaders.CacheControl = respHeader.Get("Cache-Control")
-	outHeaders.Etag = respHeader.Get("ETag")
-	return &out, outHeaders, nil
+	outHeaders.CacheControl = apiResp.Header.Get("Cache-Control")
+	outHeaders.Etag = apiResp.Header.Get("ETag")
+	return &out, outHeaders, apiResp, nil
 }
 
 // Liveness check
-func (c *Client) Healthz(ctx context.Context) (*Health, error) {
+func (c *Client) Healthz(ctx context.Context) (*Health, *APIResponse, error) {
 	pathParams := map[string]string{}
 	query := url.Values{}
 	headers := http.Header{}
@@ -366,30 +380,32 @@ func (c *Client) Healthz(ctx context.Context) (*Health, error) {
 	_ = query
 	_ = headers
 	var out Health
-	if _, err := c.do(ctx, "GET", "/healthz", pathParams, query, headers, nil, "", "application/json", &out); err != nil {
-		return nil, err
+	apiResp, err := c.do(ctx, "GET", "/healthz", pathParams, query, headers, nil, "", "application/json", &out)
+	if err != nil {
+		return nil, nil, err
 	}
-	return &out, nil
+	return &out, apiResp, nil
 }
 
 // Bulk-import items from a CSV upload
 //
 // The request body is streamed as application/octet-stream; it is not buffered.
-func (c *Client) ImportItems(ctx context.Context, body io.Reader) error {
+func (c *Client) ImportItems(ctx context.Context, body io.Reader) (*APIResponse, error) {
 	pathParams := map[string]string{}
 	query := url.Values{}
 	headers := http.Header{}
 	_ = pathParams
 	_ = query
 	_ = headers
-	if _, err := c.do(ctx, "POST", "/items/import", pathParams, query, headers, body, "application/octet-stream", "application/json", nil); err != nil {
-		return err
+	apiResp, err := c.do(ctx, "POST", "/items/import", pathParams, query, headers, body, "application/octet-stream", "application/json", nil)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	return apiResp, nil
 }
 
 // List items
-func (c *Client) ListItems(ctx context.Context, cursor *string, limit *int64) (*ItemList, error) {
+func (c *Client) ListItems(ctx context.Context, cursor *string, limit *int64) (*ItemList, *APIResponse, error) {
 	pathParams := map[string]string{}
 	query := url.Values{}
 	headers := http.Header{}
@@ -403,8 +419,9 @@ func (c *Client) ListItems(ctx context.Context, cursor *string, limit *int64) (*
 		query.Set("limit", formatPathValue(*limit))
 	}
 	var out ItemList
-	if _, err := c.do(ctx, "GET", "/items", pathParams, query, headers, nil, "", "application/json", &out); err != nil {
-		return nil, err
+	apiResp, err := c.do(ctx, "GET", "/items", pathParams, query, headers, nil, "", "application/json", &out)
+	if err != nil {
+		return nil, nil, err
 	}
-	return &out, nil
+	return &out, apiResp, nil
 }
