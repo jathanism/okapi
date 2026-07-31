@@ -163,10 +163,21 @@ var goPredeclared = map[string]bool{
 	"ctx": true, // we always have ctx context.Context in scope
 }
 
+// generatorLocals are identifiers every generated method may declare
+// itself (locals, the receiver, the body argument). A parameter whose
+// Go name mangles to one of these would redeclare it and fail to
+// compile, so safeArgName escapes them like keywords.
+var generatorLocals = map[string]bool{
+	"c": true, "pathParams": true, "query": true, "headers": true,
+	"body": true, "bodyReader": true, "out": true, "outHeaders": true,
+	"respBody": true, "apiResp": true, "err": true,
+}
+
 // safeArgName takes an already-PascalCased Go name (like "IfMatch")
 // and returns the camelCase form ("ifMatch") for use as a function
-// argument name. Reserved-word and predeclared-identifier collisions
-// get a "_" suffix. Returns "_" for empty input.
+// argument name. Collisions with reserved words, predeclared
+// identifiers, and the generated method's own locals get a "_"
+// suffix. Returns "_" for empty input.
 //
 // We lowercase only the first rune, preserving the rest verbatim, so
 // "XTrace" becomes "xTrace" — running camel(pascal(name)) here would
@@ -178,7 +189,7 @@ func safeArgName(pascalName string) string {
 	runes := []rune(pascalName)
 	runes[0] = unicode.ToLower(runes[0])
 	s := string(runes)
-	if goKeywords[s] || goPredeclared[s] {
+	if goKeywords[s] || goPredeclared[s] || generatorLocals[s] {
 		return s + "_"
 	}
 	return s

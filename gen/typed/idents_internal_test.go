@@ -42,6 +42,39 @@ var _ = Describe("camel", func() {
 	})
 })
 
+var _ = Describe("safeArgName", func() {
+	It("escapes Go keywords and predeclared identifiers", func() {
+		Expect(safeArgName("Type")).To(Equal("type_"))
+		Expect(safeArgName("Error")).To(Equal("error_"))
+		Expect(safeArgName("Ctx")).To(Equal("ctx_"))
+	})
+
+	It("escapes the generated method's own locals and receiver", func() {
+		// Every generated method declares these; a param mangling to one
+		// of them would redeclare it and fail to compile.
+		for in, out := range map[string]string{
+			"C":          "c_",
+			"PathParams": "pathParams_",
+			"Query":      "query_",
+			"Headers":    "headers_",
+			"Body":       "body_",
+			"BodyReader": "bodyReader_",
+			"Out":        "out_",
+			"OutHeaders": "outHeaders_",
+			"RespBody":   "respBody_",
+			"ApiResp":    "apiResp_",
+			"Err":        "err_",
+		} {
+			Expect(safeArgName(in)).To(Equal(out), "safeArgName(%q)", in)
+		}
+	})
+
+	It("leaves ordinary names alone", func() {
+		Expect(safeArgName("IfMatch")).To(Equal("ifMatch"))
+		Expect(safeArgName("XTrace")).To(Equal("xTrace"))
+	})
+})
+
 var _ = Describe("isGoIdent", func() {
 	It("accepts valid identifiers", func() {
 		for _, s := range []string{"foo", "_foo", "Foo1", "_x", "α"} {
