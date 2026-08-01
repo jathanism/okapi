@@ -225,24 +225,17 @@ func propIsNullable(p *base.SchemaProxy) bool {
 }
 
 // shouldPointer decides whether a struct field gets a pointer. Rules:
-//   - Required scalar/array/map → bare value (json.Marshal will emit).
-//   - Required struct → bare value.
-//   - Optional or nullable scalar → pointer (so absence vs zero is
-//     distinguishable on the wire).
-//   - Optional struct → pointer.
-//   - Arrays and maps stay non-pointer; nil is the natural "absent".
+//   - Required (non-nullable) anything → bare value.
+//   - Optional or nullable scalar/struct/array/map → pointer (so absence
+//     vs zero is distinguishable on the wire; with omitempty a bare
+//     empty slice/map would be silently dropped, making tri-state PATCH
+//     semantics — omit vs clear vs replace — unreachable).
+//   - `any` stays non-pointer; it can already hold nil.
 func shouldPointer(t *goType, required, nullable bool) bool {
-	if t == nil {
+	if t == nil || t.Kind == kindAny {
 		return false
 	}
-	switch t.Kind {
-	case kindArray, kindMap, kindAny:
-		return false
-	}
-	if !required || nullable {
-		return true
-	}
-	return false
+	return !required || nullable
 }
 
 func stringEnumFromNodes(values []*yaml.Node) []string {
