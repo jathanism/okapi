@@ -180,6 +180,17 @@ func (g *generator) translateSchema(proxy *base.SchemaProxy, hint string) (*goTy
 			if propSchema.Schema() != nil {
 				f.Doc = cleanDoc(propSchema.Schema().Description)
 			}
+			// Optional array/map fields carry a pointer purely for wire
+			// presence; spell out the contract where no description
+			// already does.
+			if f.Doc == "" && f.Pointer && f.OmitEmpty {
+				switch fieldType.Kind {
+				case kindArray:
+					f.Doc = fmt.Sprintf("nil omits the property; &%s{} sends [] (clears it).", fieldType.goExpr)
+				case kindMap:
+					f.Doc = fmt.Sprintf("nil omits the property; &%s{} sends {} (clears it).", fieldType.goExpr)
+				}
+			}
 			t.Fields = append(t.Fields, f)
 		}
 		return t, nil
@@ -232,9 +243,11 @@ func propIsNullable(p *base.SchemaProxy) bool {
 //     pointer. Optional fields carry omitempty, which drops any bare
 //     slice/map with len == 0, nil or not — making tri-state PATCH
 //     semantics (omit vs clear vs replace) unreachable. Required
-//     nullable arrays/maps have no omitempty, and a bare nil slice/map
-//     already marshals as null, so they stay bare: the pointer would
-//     unlock no new wire state.
+//     nullable *inline* arrays/maps have no omitempty, and a bare nil
+//     slice/map already marshals as null, so they stay bare: the
+//     pointer would unlock no new wire state. ($ref'd array/map
+//     components arrive as kindAlias and still take the scalar rule —
+//     pointer when nullable.)
 //   - `any` stays non-pointer; it can already hold nil.
 func shouldPointer(t *goType, required, nullable bool) bool {
 	if t == nil || t.Kind == kindAny {

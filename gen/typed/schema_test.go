@@ -154,6 +154,31 @@ properties:
 			Expect(out).ToNot(ContainSubstring("**"))
 		})
 
+		It("documents the presence contract on optional array/map fields", func() {
+			out := generateTypes(schemaSpec("M", `
+type: object
+properties:
+  xs: {type: array, items: {type: string}}
+  tags:
+    type: object
+    additionalProperties: {type: string}
+`))
+			Expect(out).To(ContainSubstring("// nil omits the property; &[]string{} sends [] (clears it)."))
+			Expect(out).To(ContainSubstring("// nil omits the property; &map[string]string{} sends {} (clears it)."))
+		})
+
+		It("keeps the schema description on documented optional array fields", func() {
+			out := generateTypes(schemaSpec("M", `
+type: object
+properties:
+  xs:
+    type: array
+    items: {type: string}
+    description: The xs.
+`))
+			Expect(out).To(ContainSubstring("The xs."))
+		})
+
 		It("required nullable array (3.1 union) stays a bare slice (nil marshals as null)", func() {
 			out := generateTypes(schemaSpec("M", `
 type: object

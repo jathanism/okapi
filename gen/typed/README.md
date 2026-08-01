@@ -81,7 +81,11 @@ substituted with `url.PathEscape`.
 
 - `components.schemas` → typed Go structs with JSON tags
 - `$ref: '#/components/schemas/Foo'` → Go type reference
-- `type: [string, "null"]` (OpenAPI 3.1 nullable) → pointer field
+- `type: [string, "null"]` (OpenAPI 3.1 nullable) → pointer field for scalars and structs.
+  Required nullable arrays/maps stay bare — a nil slice/map already marshals as `null`.
+- Optional `array` / `object` properties → pointer to slice/map (`*[]string`, `*map[string]string`).
+  A nil pointer omits the property, `&[]string{}` sends `[]` (a deliberate clear), and a populated value replaces.
+  See "Optional arrays and maps" below.
 - `format: int32 | int64 | float | double` → matching Go primitive
 - Inline `enum:` on a string field → named `type Foo string` + const block
 - `required: [...]` → controls pointer vs value, and `omitempty` JSON tag
@@ -98,6 +102,20 @@ substituted with `url.PathEscape`.
   headers (see below)
 - Response headers declared on the success response → a typed
   `<Op>ResponseHeaders` struct returned alongside the body
+
+### Optional arrays and maps
+
+Optional array and map properties are generated as pointers with `omitempty` so all three PATCH states are expressible.
+`encoding/json` drops any bare slice/map with `len == 0` under `omitempty`, which would make an explicit empty (`[]` / `{}`) unsendable.
+
+```go
+body := ThingPatch{}                      // {}            — leave unchanged
+body := ThingPatch{Tags: &[]string{}}     // {"tags":[]}   — clear
+body := ThingPatch{Tags: &[]string{"a"}}  // {"tags":["a"]} — replace
+```
+
+One caution: a non-nil pointer to a nil slice (`new([]string)`, or `&tags` where `tags` came back nil from a helper) sends `{"tags":null}`.
+That is only valid where the schema declares `"null"`; use `&[]string{}` for a clear.
 
 ### Non-JSON request and response bodies
 
