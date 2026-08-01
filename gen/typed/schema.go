@@ -226,14 +226,22 @@ func propIsNullable(p *base.SchemaProxy) bool {
 
 // shouldPointer decides whether a struct field gets a pointer. Rules:
 //   - Required (non-nullable) anything → bare value.
-//   - Optional or nullable scalar/struct/array/map → pointer (so absence
-//     vs zero is distinguishable on the wire; with omitempty a bare
-//     empty slice/map would be silently dropped, making tri-state PATCH
-//     semantics — omit vs clear vs replace — unreachable).
+//   - Optional or nullable scalar/struct → pointer (so absence vs zero
+//     is distinguishable on the wire).
+//   - Optional array/map (incl. free-form objects, map[string]any) →
+//     pointer. Optional fields carry omitempty, which drops any bare
+//     slice/map with len == 0, nil or not — making tri-state PATCH
+//     semantics (omit vs clear vs replace) unreachable. Required
+//     nullable arrays/maps have no omitempty, and a bare nil slice/map
+//     already marshals as null, so they stay bare: the pointer would
+//     unlock no new wire state.
 //   - `any` stays non-pointer; it can already hold nil.
 func shouldPointer(t *goType, required, nullable bool) bool {
 	if t == nil || t.Kind == kindAny {
 		return false
+	}
+	if t.Kind == kindArray || t.Kind == kindMap {
+		return !required
 	}
 	return !required || nullable
 }

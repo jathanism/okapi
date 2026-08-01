@@ -151,19 +151,34 @@ properties:
   xs: {type: array, items: {type: string}}
 `))
 			Expect(out).To(MatchRegexp(`Xs\s+\*\[\]string\s+` + "`" + `json:"xs,omitempty"` + "`"))
+			Expect(out).ToNot(ContainSubstring("**"))
 		})
 
-		It("required nullable array (3.1 union) is a pointer without omitempty", func() {
+		It("required nullable array (3.1 union) stays a bare slice (nil marshals as null)", func() {
 			out := generateTypes(schemaSpec("M", `
 type: object
 required: [xs]
 properties:
   xs: {type: [array, "null"], items: {type: string}}
 `))
-			Expect(out).To(MatchRegexp(`Xs\s+\*\[\]string\s+` + "`" + `json:"xs"` + "`"))
+			Expect(out).To(MatchRegexp(`Xs\s+\[\]string\s+` + "`" + `json:"xs"` + "`"))
+			Expect(out).ToNot(ContainSubstring("*[]string"))
 		})
 
-		It("required map stays as a map (nil = absent)", func() {
+		It("required nullable map (3.1 union) stays a bare map (nil marshals as null)", func() {
+			out := generateTypes(schemaSpec("M", `
+type: object
+required: [tags]
+properties:
+  tags:
+    type: [object, "null"]
+    additionalProperties: {type: string}
+`))
+			Expect(out).To(MatchRegexp(`Tags\s+map\[string\]string\s+` + "`" + `json:"tags"` + "`"))
+			Expect(out).ToNot(ContainSubstring("*map["))
+		})
+
+		It("required map stays as a map (no pointer)", func() {
 			out := generateTypes(schemaSpec("M", `
 type: object
 required: [tags]
@@ -185,6 +200,15 @@ properties:
     additionalProperties: {type: string}
 `))
 			Expect(out).To(MatchRegexp(`Tags\s+\*map\[string\]string\s+` + "`" + `json:"tags,omitempty"` + "`"))
+		})
+
+		It("optional free-form object is a pointer to map[string]any with omitempty", func() {
+			out := generateTypes(schemaSpec("M", `
+type: object
+properties:
+  meta: {type: object}
+`))
+			Expect(out).To(MatchRegexp(`Meta\s+\*map\[string\]any\s+` + "`" + `json:"meta,omitempty"` + "`"))
 		})
 	})
 

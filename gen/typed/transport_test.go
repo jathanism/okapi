@@ -160,7 +160,7 @@ paths:
       responses:
         '200':
           description: ok
-          content: {application/json: {schema: {$ref: '#/components/schemas/Thing'}}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/ThingMetaPatch'}}}
 components:
   schemas:
     Thing:
@@ -1035,12 +1035,22 @@ func main() {
 	})
 
 	It("distinguishes omitted, empty, and populated optional array/map fields", func() {
+		// The PATCH responses cycle through the shapes a server can hand
+		// back for the same fields, so the test also pins what each one
+		// decodes into (absent and null both land as a nil pointer; []
+		// lands as a pointer to an empty slice).
+		responses := []string{
+			`{}`,
+			`{"tags":null,"labels":null}`,
+			`{"tags":[],"labels":{}}`,
+			`{}`,
+		}
 		var bodies []string
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw, _ := io.ReadAll(r.Body)
 			bodies = append(bodies, strings.TrimSpace(string(raw)))
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"id":"x","name":"y"}`))
+			_, _ = w.Write([]byte(responses[len(bodies)-1]))
 		}))
 		DeferCleanup(srv.Close)
 
@@ -1050,36 +1060,56 @@ import (
 	"fmt"
 	"os"
 )
+func check(r *ThingMetaPatch, err error, wantNilTags, wantNilLabels bool) {
+	if err != nil {
+		fmt.Println("ERR", err); os.Exit(1)
+	}
+	if (r.Tags == nil) != wantNilTags || (r.Labels == nil) != wantNilLabels {
+		fmt.Printf("DECODE tags=%v labels=%v\n", r.Tags, r.Labels); os.Exit(1)
+	}
+}
 func main() {
 	c := NewClient(os.Getenv("BASE"))
 	ctx := context.Background()
 
-	// 1. Omitted: nil pointers → properties absent.
-	if _, _, err := c.PatchThingMeta(ctx, "x", ThingMetaPatch{}); err != nil {
-		fmt.Println("ERR", err); os.Exit(1)
-	}
+	// 1. Omitted: nil pointers → properties absent. Response {} → nil pointers.
+	r, _, err := c.PatchThingMeta(ctx, "x", ThingMetaPatch{})
+	check(r, err, true, true)
 
 	// 2. Explicit empty: pointer to empty slice/map → [] and {}.
+	// Response nulls decode to nil pointers, same as absent.
 	empty := ThingMetaPatch{Tags: &[]string{}, Labels: &map[string]string{}}
-	if _, _, err := c.PatchThingMeta(ctx, "x", empty); err != nil {
-		fmt.Println("ERR", err); os.Exit(1)
-	}
+	r, _, err = c.PatchThingMeta(ctx, "x", empty)
+	check(r, err, true, true)
 
-	// 3. Populated.
+	// 3. Populated. Response [] / {} decode to non-nil pointers to empty values.
 	full := ThingMetaPatch{
 		Tags:   &[]string{"vip"},
 		Labels: &map[string]string{"env": "prod"},
 	}
-	if _, _, err := c.PatchThingMeta(ctx, "x", full); err != nil {
-		fmt.Println("ERR", err); os.Exit(1)
+	r, _, err = c.PatchThingMeta(ctx, "x", full)
+	check(r, err, false, false)
+	if len(*r.Tags) != 0 || len(*r.Labels) != 0 {
+		fmt.Println("EXPECTED EMPTY", *r.Tags, *r.Labels); os.Exit(1)
 	}
+
+	// 4. Pointer to nil slice/map: the field is present but null.
+	r, _, err = c.PatchThingMeta(ctx, "x", ThingMetaPatch{
+		Tags:   new([]string),
+		Labels: new(map[string]string),
+	})
+	check(r, err, true, true)
+
 	fmt.Println("OK")
 }
 `)
 		Expect(strings.TrimSpace(out)).To(Equal("OK"))
-		Expect(bodies).To(HaveLen(3))
+		Expect(bodies).To(HaveLen(4))
+		// Exact string matches: encoding/json emits struct fields in
+		// declaration order, which follows the spec's property order.
 		Expect(bodies[0]).To(Equal(`{}`))
 		Expect(bodies[1]).To(Equal(`{"tags":[],"labels":{}}`))
 		Expect(bodies[2]).To(Equal(`{"tags":["vip"],"labels":{"env":"prod"}}`))
+		Expect(bodies[3]).To(Equal(`{"tags":null,"labels":null}`))
 	})
 })
