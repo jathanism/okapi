@@ -144,14 +144,23 @@ properties:
 			Expect(out).To(MatchRegexp(`Xs\s+\[\]string\s+` + "`" + `json:"xs"` + "`"))
 		})
 
-		It("optional array stays as a slice with omitempty (no double-pointer)", func() {
+		It("optional array is a pointer to a slice with omitempty", func() {
 			out := generateTypes(schemaSpec("M", `
 type: object
 properties:
   xs: {type: array, items: {type: string}}
 `))
-			Expect(out).To(MatchRegexp(`Xs\s+\[\]string\s+` + "`" + `json:"xs,omitempty"` + "`"))
-			Expect(out).ToNot(ContainSubstring("*[]string"))
+			Expect(out).To(MatchRegexp(`Xs\s+\*\[\]string\s+` + "`" + `json:"xs,omitempty"` + "`"))
+		})
+
+		It("required nullable array (3.1 union) is a pointer without omitempty", func() {
+			out := generateTypes(schemaSpec("M", `
+type: object
+required: [xs]
+properties:
+  xs: {type: [array, "null"], items: {type: string}}
+`))
+			Expect(out).To(MatchRegexp(`Xs\s+\*\[\]string\s+` + "`" + `json:"xs"` + "`"))
 		})
 
 		It("required map stays as a map (nil = absent)", func() {
@@ -165,6 +174,17 @@ properties:
 `))
 			Expect(out).To(MatchRegexp(`Tags\s+map\[string\]string`))
 			Expect(out).ToNot(ContainSubstring("*map["))
+		})
+
+		It("optional map is a pointer to a map with omitempty", func() {
+			out := generateTypes(schemaSpec("M", `
+type: object
+properties:
+  tags:
+    type: object
+    additionalProperties: {type: string}
+`))
+			Expect(out).To(MatchRegexp(`Tags\s+\*map\[string\]string\s+` + "`" + `json:"tags,omitempty"` + "`"))
 		})
 	})
 

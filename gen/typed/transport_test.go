@@ -149,6 +149,18 @@ paths:
         '200':
           description: ok
           content: {application/json: {schema: {$ref: '#/components/schemas/Thing'}}}
+  /thing/{id}/meta:
+    patch:
+      operationId: patchThingMeta
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ThingMetaPatch'}}}
+      responses:
+        '200':
+          description: ok
+          content: {application/json: {schema: {$ref: '#/components/schemas/Thing'}}}
 components:
   schemas:
     Thing:
@@ -157,6 +169,15 @@ components:
       properties:
         id: {type: string}
         name: {type: string}
+    ThingMetaPatch:
+      type: object
+      properties:
+        tags:
+          type: array
+          items: {type: string}
+        labels:
+          type: object
+          additionalProperties: {type: string}
 `
 
 // runWithGenerated writes the generated client into a temp module
@@ -1011,5 +1032,54 @@ func main() {
 }
 `)
 		Expect(strings.TrimSpace(out)).To(Equal("OK"))
+	})
+
+	It("distinguishes omitted, empty, and populated optional array/map fields", func() {
+		var bodies []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			raw, _ := io.ReadAll(r.Body)
+			bodies = append(bodies, strings.TrimSpace(string(raw)))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"x","name":"y"}`))
+		}))
+		DeferCleanup(srv.Close)
+
+		out := runWithGenerated(srv.URL, `package main
+import (
+	"context"
+	"fmt"
+	"os"
+)
+func main() {
+	c := NewClient(os.Getenv("BASE"))
+	ctx := context.Background()
+
+	// 1. Omitted: nil pointers → properties absent.
+	if _, _, err := c.PatchThingMeta(ctx, "x", ThingMetaPatch{}); err != nil {
+		fmt.Println("ERR", err); os.Exit(1)
+	}
+
+	// 2. Explicit empty: pointer to empty slice/map → [] and {}.
+	empty := ThingMetaPatch{Tags: &[]string{}, Labels: &map[string]string{}}
+	if _, _, err := c.PatchThingMeta(ctx, "x", empty); err != nil {
+		fmt.Println("ERR", err); os.Exit(1)
+	}
+
+	// 3. Populated.
+	full := ThingMetaPatch{
+		Tags:   &[]string{"vip"},
+		Labels: &map[string]string{"env": "prod"},
+	}
+	if _, _, err := c.PatchThingMeta(ctx, "x", full); err != nil {
+		fmt.Println("ERR", err); os.Exit(1)
+	}
+	fmt.Println("OK")
+}
+`)
+		Expect(strings.TrimSpace(out)).To(Equal("OK"))
+		Expect(bodies).To(HaveLen(3))
+		Expect(bodies[0]).To(Equal(`{}`))
+		Expect(bodies[1]).To(Equal(`{"tags":[],"labels":{}}`))
+		Expect(bodies[2]).To(Equal(`{"tags":["vip"],"labels":{"env":"prod"}}`))
 	})
 })
