@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -1045,12 +1046,20 @@ func main() {
 			`{"tags":[],"labels":{}}`,
 			`{}`,
 		}
+		var mu sync.Mutex
 		var bodies []string
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw, _ := io.ReadAll(r.Body)
+			mu.Lock()
 			bodies = append(bodies, strings.TrimSpace(string(raw)))
+			n := len(bodies)
+			mu.Unlock()
+			if n > len(responses) {
+				http.Error(w, "unexpected request", http.StatusInternalServerError)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(responses[len(bodies)-1]))
+			_, _ = w.Write([]byte(responses[n-1]))
 		}))
 		DeferCleanup(srv.Close)
 
@@ -1093,7 +1102,10 @@ func main() {
 		fmt.Println("EXPECTED EMPTY", *r.Tags, *r.Labels); os.Exit(1)
 	}
 
-	// 4. Pointer to nil slice/map: the field is present but null.
+	// 4. Pointer to nil slice/map: the field is present but null. Only
+	// valid on the wire where the schema declares "null" (tags/labels
+	// here don't) — pinned so the accidental read-modify-write shape
+	// (&nilSlice) is documented, not silent.
 	r, _, err = c.PatchThingMeta(ctx, "x", ThingMetaPatch{
 		Tags:   new([]string),
 		Labels: new(map[string]string),
@@ -1104,12 +1116,15 @@ func main() {
 }
 `)
 		Expect(strings.TrimSpace(out)).To(Equal("OK"))
-		Expect(bodies).To(HaveLen(4))
+		mu.Lock()
+		got := append([]string(nil), bodies...)
+		mu.Unlock()
+		Expect(got).To(HaveLen(4))
 		// Exact string matches: encoding/json emits struct fields in
 		// declaration order, which follows the spec's property order.
-		Expect(bodies[0]).To(Equal(`{}`))
-		Expect(bodies[1]).To(Equal(`{"tags":[],"labels":{}}`))
-		Expect(bodies[2]).To(Equal(`{"tags":["vip"],"labels":{"env":"prod"}}`))
-		Expect(bodies[3]).To(Equal(`{"tags":null,"labels":null}`))
+		Expect(got[0]).To(Equal(`{}`))
+		Expect(got[1]).To(Equal(`{"tags":[],"labels":{}}`))
+		Expect(got[2]).To(Equal(`{"tags":["vip"],"labels":{"env":"prod"}}`))
+		Expect(got[3]).To(Equal(`{"tags":null,"labels":null}`))
 	})
 })
