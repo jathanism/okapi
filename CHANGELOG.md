@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.3.1 - 2026-08-01
+#### Bug Fixes
+- (**gen/typed**) document the presence contract on optional array/map fields (#17) - (be48229) - jathanism, *Claude Fable 5*
+- (**gen/typed**) keep required-nullable arrays/maps bare slices/maps (#17) - (6802103) - jathanism, *Claude Fable 5*
+- <span style="background-color: #d73a49; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 0.85em;">BREAKING</span>(**gen/typed**) render optional array/map fields as pointers (resolves #17) - (2310e29) - jathanism, *Claude Fable 5*
+
+- - -
+
 ## v0.3.0 - 2026-07-31
 #### Features
 - <span style="background-color: #d73a49; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 0.85em;">BREAKING</span>(**gen/typed**) surface exact status codes via an APIResponse return - (95ba533) - jathanism, *Claude Fable 5*
