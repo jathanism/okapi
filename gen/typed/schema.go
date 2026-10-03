@@ -3,6 +3,8 @@ package typed
 import (
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	base "github.com/pb33f/libopenapi/datamodel/high/base"
 	yaml "go.yaml.in/yaml/v4"
@@ -281,9 +283,23 @@ func stringSet(in []string) map[string]bool {
 func refName(ref string) string {
 	const prefix = "#/components/schemas/"
 	if strings.HasPrefix(ref, prefix) {
-		return pascal(strings.TrimPrefix(ref, prefix))
+		return schemaGoName(strings.TrimPrefix(ref, prefix))
 	}
 	return ""
+}
+
+// schemaGoName is the Go type name for a components.schemas key. A key
+// that is already an exported Go identifier is kept verbatim, so acronyms
+// survive ("AccountContactIDRangeResponseBody", not "...Idrange...");
+// anything else is normalized with pascal. The declaration and every
+// reference to it must go through this function so they cannot diverge.
+func schemaGoName(key string) string {
+	if isGoIdent(key) {
+		if r, _ := utf8.DecodeRuneInString(key); unicode.IsUpper(r) {
+			return key
+		}
+	}
+	return pascal(key)
 }
 
 func cleanDoc(s string) string {

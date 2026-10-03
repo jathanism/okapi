@@ -172,11 +172,11 @@ func (g *generator) collect() error {
 	if g.model.Components != nil && g.model.Components.Schemas != nil {
 		// libopenapi exposes Schemas as an ordered map; range gives stable order.
 		for pair := g.model.Components.Schemas.First(); pair != nil; pair = pair.Next() {
-			name := pair.Key()
+			name := schemaGoName(pair.Key())
 			schema := pair.Value()
 			t, err := g.translateSchema(schema, name)
 			if err != nil {
-				return fmt.Errorf("schema %s: %w", name, err)
+				return fmt.Errorf("schema %s: %w", pair.Key(), err)
 			}
 			g.registerNamedType(name, t)
 		}
