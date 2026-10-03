@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.3.2 - 2026-10-03
+#### Bug Fixes
+- (**gen/typed**) keep acronym casing in component schema type names - (702839b) - Chotiwat Chawannakul, *Claude Sonnet 5.5*
+
+- - -
+
 ## v0.3.1 - 2026-08-01
 #### Bug Fixes
 - (**gen/typed**) document the presence contract on optional array/map fields (#17) - (be48229) - jathanism, *Claude Fable 5*
