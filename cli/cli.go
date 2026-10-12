@@ -238,9 +238,16 @@ func (o *OpenApiCli) makeCommandTree(api *openapi.OpenApi) []*cli.Command {
 	// cmds := make([]*cli.Command, 0, 16) // 16 is a good number for the number of base commands
 	cmds := make(map[string]*cli.Command)
 	endpoints := api.Endpoints()
+	var topLevel []*cli.Command
 	for _, name := range api.EndpointOperationNames() {
 		endpoint := endpoints[name]
 		parts := strings.Split(endpoint.Name, "_")
+		if len(parts) == 1 {
+			// An operationId without "_" (camelCase, such as getThing) has no verb group to sit in,
+			// so it becomes a command of its own.
+			topLevel = append(topLevel, o.makeLeaf(parts[0], endpoint))
+			continue
+		}
 		verb := parts[0]
 		if cmds[verb] == nil {
 			cmds[verb] = &cli.Command{
@@ -252,11 +259,11 @@ func (o *OpenApiCli) makeCommandTree(api *openapi.OpenApi) []*cli.Command {
 		}
 		o.makeSubcommands(cmds[verb], parts[1:], endpoint)
 	}
-	cmdList := make([]*cli.Command, 0, len(cmds))
+	cmdList := make([]*cli.Command, 0, len(cmds)+len(topLevel))
 	for _, c := range cmds {
 		cmdList = append(cmdList, c)
 	}
-	return cmdList
+	return append(cmdList, topLevel...)
 }
 
 // getHostFlag returns the configured host flag, or a default one.
@@ -278,27 +285,7 @@ func (o *OpenApiCli) makeSubcommands(parent *cli.Command, parts []string, endpoi
 	}
 
 	if len(parts) == 1 {
-		extraDescription := ""
-		if bodySchema := endpoint.BodySchema(); bodySchema != "" {
-			if !strings.HasSuffix(endpoint.Description, "\n\n") {
-				extraDescription = "\n\n"
-			} else if !strings.HasSuffix(bodySchema, "\n") {
-				extraDescription = "\n"
-			}
-			extraDescription += "Schema for JSON request body (--data):\n\n```json\n" + bodySchema + "\n```"
-		}
-
-		// We have a leaf
-		cmd := &cli.Command{
-			Name:        parts[0],
-			Usage:       endpoint.Summary,
-			Description: endpoint.Description + extraDescription,
-			// Category:        parent.Name,
-			HideHelpCommand: true,
-			Action:          o.makeAction(endpoint),
-			Flags:           makeFlags(endpoint, o.getHostFlag()),
-		}
-		parent.Subcommands = append(parent.Subcommands, cmd)
+		parent.Subcommands = append(parent.Subcommands, o.makeLeaf(parts[0], endpoint))
 		return parent
 	}
 
@@ -322,6 +309,29 @@ func (o *OpenApiCli) makeSubcommands(parent *cli.Command, parts []string, endpoi
 	parent.Subcommands = append(parent.Subcommands, cmd)
 	return o.makeSubcommands(cmd, parts[1:], endpoint)
 	// return cmd
+}
+
+// makeLeaf creates the command for one endpoint: its name, usage, description, action and flags.
+func (o *OpenApiCli) makeLeaf(name string, endpoint *spec.Endpoint) *cli.Command {
+	extraDescription := ""
+	if bodySchema := endpoint.BodySchema(); bodySchema != "" {
+		if !strings.HasSuffix(endpoint.Description, "\n\n") {
+			extraDescription = "\n\n"
+		} else if !strings.HasSuffix(bodySchema, "\n") {
+			extraDescription = "\n"
+		}
+		extraDescription += "Schema for JSON request body (--data):\n\n```json\n" + bodySchema + "\n```"
+	}
+
+	return &cli.Command{
+		Name:        name,
+		Usage:       endpoint.Summary,
+		Description: endpoint.Description + extraDescription,
+		// Category:        parent.Name,
+		HideHelpCommand: true,
+		Action:          o.makeAction(endpoint),
+		Flags:           makeFlags(endpoint, o.getHostFlag()),
+	}
 }
 
 // makeFlags creates a list of cli.Flags from a spec.Endpoint
