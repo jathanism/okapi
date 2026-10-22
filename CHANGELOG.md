@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.3.3 - 2026-10-22
+#### Bug Fixes
+- (**cli**) build a command for an operationId with no underscore - (71b24b4) - jay23606
+
+- - -
+
 ## v0.3.2 - 2026-10-03
 #### Bug Fixes
 - (**gen/typed**) keep acronym casing in component schema type names - (702839b) - Chotiwat Chawannakul, *Claude Sonnet 5.5*
