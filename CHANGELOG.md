@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.4.0 - 2026-11-06
+#### Features
+- (**gen/typed**) render anyOf [X, null] as a nilable X - (5f58be1) - jathanism
+
+- - -
+
 ## v0.3.3 - 2026-10-22
 #### Bug Fixes
 - (**cli**) build a command for an operationId with no underscore - (71b24b4) - jay23606
