@@ -1,0 +1,91 @@
+# Shaped like the local-numbers service's spec: object members the service
+# sends as null are `anyOf: [{$ref}, {type: "null"}]` (in both orders), one
+# map is `type: [object, "null"]`, and request strings are
+# `type: [string, "null"]`. Golden output: *.golden next to this file.
+openapi: 3.1.0
+info: {title: Local Numbers fixture, version: 0.0.1}
+paths:
+  /numbers/{id}:
+    get:
+      operationId: getNumber
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Number'}
+  /registrations:
+    post:
+      operationId: createRegistration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RegistrationRequest'}
+      responses:
+        '201':
+          description: created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Registration'}
+components:
+  schemas:
+    Adoption:
+      type: object
+      required: [id, state]
+      properties:
+        id: {type: string}
+        state: {type: string}
+    Placement:
+      type: object
+      required: [campaignId]
+      properties:
+        campaignId: {type: string}
+    Number:
+      type: object
+      required: [id, adoption, placement]
+      properties:
+        id: {type: string}
+        adoption:
+          anyOf:
+            - $ref: '#/components/schemas/Adoption'
+            - type: "null"
+        placement:
+          description: Where the number is placed, or null.
+          anyOf:
+            - type: "null"
+            - $ref: '#/components/schemas/Placement'
+    Registration:
+      type: object
+      required: [id, placement, connections, proposal]
+      properties:
+        id: {type: string}
+        placement:
+          oneOf:
+            - $ref: '#/components/schemas/Placement'
+            - type: "null"
+        connections:
+          anyOf:
+            - type: array
+              items: {$ref: '#/components/schemas/Placement'}
+            - type: "null"
+        proposal:
+          type: [object, "null"]
+          additionalProperties: {type: string}
+        note:
+          anyOf:
+            - type: string
+            - type: "null"
+        either:
+          description: A real union stays any.
+          anyOf:
+            - $ref: '#/components/schemas/Adoption'
+            - $ref: '#/components/schemas/Placement'
+    RegistrationRequest:
+      type: object
+      required: [areaCode]
+      properties:
+        areaCode: {type: [string, "null"]}
+        state: {type: [string, "null"]}
