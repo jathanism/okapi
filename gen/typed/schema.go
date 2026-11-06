@@ -81,9 +81,16 @@ func (g *generator) translateSchema(proxy *base.SchemaProxy, hint string) (*goTy
 		return &goType{Kind: kindAny, goExpr: "any"}, nil
 	}
 
+	// anyOf/oneOf [X, {type: "null"}] is OpenAPI 3.1's "X or null": render
+	// X, and let the field rules make it nilable (propIsNullable sees the
+	// same union).
+	if member := nullableMember(schema); member != nil {
+		return g.translateSchema(member, hint)
+	}
+
 	// allOf with a single member is just that member. We don't attempt to
-	// merge multi-member allOf — caller gets `any` and a TODO. oneOf/anyOf
-	// likewise fall through to `any` for the MVP.
+	// merge multi-member allOf — caller gets `any` and a TODO. Any other
+	// oneOf/anyOf likewise falls through to `any`.
 	if len(schema.AllOf) == 1 {
 		return g.translateSchema(schema.AllOf[0], hint)
 	}
@@ -234,7 +241,75 @@ func propIsNullable(p *base.SchemaProxy) bool {
 			return true
 		}
 	}
-	return false
+	return nullableMember(s) != nil
+}
+
+// nullableMember recognizes OpenAPI 3.1's "X or null" union and returns
+// X. The schema must be an anyOf or a oneOf (not both) with exactly two
+// members, in either order: a bare {type: "null"}, and either a $ref or
+// a schema with one concrete type and no composition of its own. The
+// union itself must carry no type, properties or allOf. Anything else
+// returns nil, and the caller keeps rendering the union as `any`.
+func nullableMember(s *base.Schema) *base.SchemaProxy {
+	if s == nil || len(s.Type) > 0 || len(s.AllOf) > 0 ||
+		(s.Properties != nil && s.Properties.Len() > 0) {
+		return nil
+	}
+	var members []*base.SchemaProxy
+	switch {
+	case len(s.AnyOf) > 0 && len(s.OneOf) == 0:
+		members = s.AnyOf
+	case len(s.OneOf) > 0 && len(s.AnyOf) == 0:
+		members = s.OneOf
+	default:
+		return nil
+	}
+	if len(members) != 2 {
+		return nil
+	}
+	for i, m := range members {
+		other := members[1-i]
+		if isNullSchema(m) && isConcreteMember(other) {
+			return other
+		}
+	}
+	return nil
+}
+
+// isNullSchema reports whether p is exactly {type: "null"}.
+func isNullSchema(p *base.SchemaProxy) bool {
+	if p == nil || p.GetReference() != "" {
+		return false
+	}
+	s := p.Schema()
+	return s != nil && len(s.Type) == 1 && s.Type[0] == "null" && !hasComposition(s)
+}
+
+// isConcreteMember reports whether p can stand alone as the non-null
+// half of a nullable union: a $ref, or a schema with exactly one
+// non-null type and no anyOf/oneOf/allOf.
+func isConcreteMember(p *base.SchemaProxy) bool {
+	if p == nil {
+		return false
+	}
+	if p.GetReference() != "" {
+		return true
+	}
+	s := p.Schema()
+	if s == nil || hasComposition(s) {
+		return false
+	}
+	concrete := 0
+	for _, t := range s.Type {
+		if t != "null" {
+			concrete++
+		}
+	}
+	return concrete == 1
+}
+
+func hasComposition(s *base.Schema) bool {
+	return len(s.AnyOf) > 0 || len(s.OneOf) > 0 || len(s.AllOf) > 0
 }
 
 // shouldPointer decides whether a struct field gets a pointer. Rules:
