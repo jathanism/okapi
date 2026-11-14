@@ -81,7 +81,7 @@ substituted with `url.PathEscape`.
 
 - `components.schemas` → typed Go structs with JSON tags
 - `$ref: '#/components/schemas/Foo'` → Go type reference
-- `type: [string, "null"]` (OpenAPI 3.1 nullable) → pointer field for scalars and structs.
+- `type: [string, "null"]` (OpenAPI 3.1 nullable) or `nullable: true` (OpenAPI 3.0) → pointer field for scalars and structs.
   Required nullable arrays/maps stay bare — a nil slice/map already marshals as `null`.
 - `anyOf` / `oneOf` of exactly two members, `{type: "null"}` and either a `$ref` or a schema with one concrete type (in either order), is the 3.1 "X or null" form.
   It renders as X under the same nullable rules: `*Brand`, `*string`, and a bare `[]T` / `map[string]V` when required.
