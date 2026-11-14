@@ -236,6 +236,9 @@ func propIsNullable(p *base.SchemaProxy) bool {
 	if s == nil {
 		return false
 	}
+	if s.Nullable != nil && *s.Nullable {
+		return true
+	}
 	for _, t := range s.Type {
 		if t == "null" {
 			return true

@@ -134,6 +134,22 @@ properties:
 			Expect(out).To(MatchRegexp(`S\s+\*string\s+` + "`" + `json:"s"` + "`"))
 		})
 
+		It("required nullable scalar (3.0 nullable: true) is a pointer without omitempty", func() {
+			out := generateTypes([]byte(`
+openapi: 3.0.3
+info: {title: t, version: 0.0.1}
+paths: {}
+components:
+  schemas:
+    M:
+      type: object
+      required: [s]
+      properties:
+        s: {type: string, nullable: true}
+`))
+			Expect(out).To(MatchRegexp(`S\s+\*string\s+` + "`" + `json:"s"` + "`"))
+		})
+
 		It("required array stays as a slice (nil = absent)", func() {
 			out := generateTypes(schemaSpec("M", `
 type: object
